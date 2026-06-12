@@ -1,6 +1,6 @@
-var IdentifyLocations_File = require('users/kwheeler/AppTrail_Phenology:IdentifyLocations')
+var identify_locations_File = require('users/kwheeler/AppTrail_Phenology:IdentifyLocations')
 
-var MA_forest = IdentifyLocations_File().identifyLocations()
+var MA_forest = identify_locations_File().identify_locations()
 
 Map.addLayer(
   MA_forest.selfMask(),
