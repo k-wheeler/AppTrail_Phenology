@@ -22,7 +22,7 @@ return route_buffer
 };
 
 exports.identify_forests = function(){
-var route_buffer = identify_route_buffer();
+var route_buffer = exports.identify_route_buffer();
 
 //Read in National Land Cover Database and filter to deciduous and mixed
 var nlcd = ee.ImageCollection("USGS/NLCD_RELEASES/2021_REL/NLCD")
