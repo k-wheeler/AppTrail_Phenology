@@ -1,0 +1,39 @@
+//Read in Appalachian Trail (AT)
+var AT_route = ee.FeatureCollection("projects/turnkey-lacing-391919/assets/AT_Trail");
+
+//Filter to AT in Massachusetts
+var MA_boundary = ee.FeatureCollection('TIGER/2018/States').filter(
+  ee.Filter.inList('NAME', [
+    'Massachusetts'
+  ])
+);
+
+var MA_route = AT_route.geometry().intersection(
+  MA_boundary.geometry(),
+  ee.ErrorMargin(1)
+);
+
+//Simplify trail and add buffer
+var route_buffer = MA_route.simplify(10).buffer(50); //Simplify and Buffer by 50m
+
+//Read in National Land Cover Database and filter to deciduous and mixed
+var nlcd = ee.ImageCollection("USGS/NLCD_RELEASES/2021_REL/NLCD")
+  .filter(ee.Filter.eq('system:index', '2021'))
+  .first();
+
+var landcover = nlcd.select('landcover');
+
+var forest = landcover.eq(41)
+  .or(landcover.eq(43));
+  
+var MA_forest = forest.clip(route_buffer);
+
+//Plot on Map for QC
+Map.addLayer(
+  MA_forest.selfMask(),
+  {palette: ['green']},
+  'Deciduous + Mixed Forest'
+);
+//Map.addLayer(Route_Buffer, {color: 'red'}, 'Buffer');
+Map.addLayer(MA_route, {color: 'black'}, 'MA AT');
+Map.centerObject(MA_route);
