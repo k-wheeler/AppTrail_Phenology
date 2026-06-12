@@ -1,4 +1,4 @@
-exports.identifyLocations = function(){
+exports.identify_locations = function(){
 
 //Read in Appalachian Trail (AT)
 var AT_route = ee.FeatureCollection("projects/turnkey-lacing-391919/assets/AT_Trail");
@@ -42,4 +42,4 @@ Map.addLayer(MA_route, {color: 'black'}, 'MA AT');
 Map.centerObject(MA_route);
 */
 return MA_forest
-}
+};
