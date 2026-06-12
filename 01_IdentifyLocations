@@ -34,6 +34,7 @@ Map.addLayer(
   {palette: ['green']},
   'Deciduous + Mixed Forest'
 );
+
 //Map.addLayer(Route_Buffer, {color: 'red'}, 'Buffer');
 Map.addLayer(MA_route, {color: 'black'}, 'MA AT');
 Map.centerObject(MA_route);
