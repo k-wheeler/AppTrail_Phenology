@@ -3,6 +3,12 @@ var identify_locations_File = require('users/kwheeler/AppTrail_Phenology:Identif
 
 var MA_forest = identify_locations_File.identify_forests()
 
+Map.addLayer(
+  MA_forest.selfMask(),
+  {palette: ['green']},
+  'Deciduous + Mixed Forest'
+);
+
 /*
 //Read in Landsat HLS
 var hls = ee.ImageCollection("NASA/HLS/HLSL30/v002").select(['B5', 'B4', 'B2']);
