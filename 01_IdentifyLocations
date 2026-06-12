@@ -1,3 +1,5 @@
+exports.identifyLocations = function(){
+
 //Read in Appalachian Trail (AT)
 var AT_route = ee.FeatureCollection("projects/turnkey-lacing-391919/assets/AT_Trail");
 
@@ -29,7 +31,7 @@ var forest = landcover.eq(41)
 var MA_forest = forest.clip(route_buffer);
 
 //Plot on Map for QC
-Map.addLayer(
+/*Map.addLayer(
   MA_forest.selfMask(),
   {palette: ['green']},
   'Deciduous + Mixed Forest'
@@ -38,3 +40,6 @@ Map.addLayer(
 //Map.addLayer(Route_Buffer, {color: 'red'}, 'Buffer');
 Map.addLayer(MA_route, {color: 'black'}, 'MA AT');
 Map.centerObject(MA_route);
+*/
+return MA_forest
+}
