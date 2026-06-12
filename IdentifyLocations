@@ -1,4 +1,4 @@
-exports.identify_locations = function(){
+exports.identify_route_buffer = function(){
 
 //Read in Appalachian Trail (AT)
 var AT_route = ee.FeatureCollection("projects/turnkey-lacing-391919/assets/AT_Trail");
@@ -17,6 +17,12 @@ var MA_route = AT_route.geometry().intersection(
 
 //Simplify trail and add buffer
 var route_buffer = MA_route.simplify(10).buffer(50); //Simplify and Buffer by 50m
+
+return route_buffer
+};
+
+exports.identify_forests = function(){
+var route_buffer = identify_route_buffer();
 
 //Read in National Land Cover Database and filter to deciduous and mixed
 var nlcd = ee.ImageCollection("USGS/NLCD_RELEASES/2021_REL/NLCD")
