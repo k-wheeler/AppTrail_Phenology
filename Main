@@ -1,0 +1,9 @@
+var IdentifyLocations_File = require('users/kwheeler/AppTrail_Phenology:IdentifyLocations')
+
+var MA_forest = IdentifyLocations_File().identifyLocations()
+
+Map.addLayer(
+  MA_forest.selfMask(),
+  {palette: ['green']},
+  'Deciduous + Mixed Forest'
+);
