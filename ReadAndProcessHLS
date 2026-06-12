@@ -1,8 +1,9 @@
 var identify_locations_File = require('users/kwheeler/AppTrail_Phenology:IdentifyLocations')
 
-//var MA_forest = identify_locations_File.identify_locations()
 
+var MA_forest = identify_locations_File.identify_locations()
 
+/*
 //Read in Landsat HLS
 var hls = ee.ImageCollection("NASA/HLS/HLSL30/v002").select(['B5', 'B4', 'B2']);
 
@@ -16,6 +17,7 @@ var maxDate = ee.Date(ee.Number(dates.reduce(ee.Reducer.max())));
 
 print('Min date', minDate);
 print('Max date', maxDate);
+*/
 
 //Add EVI band
 /*
