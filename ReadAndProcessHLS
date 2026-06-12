@@ -1,9 +1,36 @@
-var identifyLocations = require('users/kwheeler/AppTrail_Phenology:01_IdentifyLocations')
+var identify_locations_File = require('users/kwheeler/AppTrail_Phenology:IdentifyLocations')
 
-var MA_forest = identifyLocations()
+//var MA_forest = identify_locations_File.identify_locations()
 
-Map.addLayer(
-  MA_forest.selfMask(),
-  {palette: ['green']},
-  'Deciduous + Mixed Forest'
-);
+
+//Read in Landsat HLS
+var hls = ee.ImageCollection("NASA/HLS/HLSL30/v002").select(['B5', 'B4', 'B2']);
+
+//var img = ee.Image(hls.first());
+//print(img.bandNames());
+
+var dates = hls.aggregate_array('system:time_start');
+
+var minDate = ee.Date(ee.Number(dates.reduce(ee.Reducer.min())));
+var maxDate = ee.Date(ee.Number(dates.reduce(ee.Reducer.max())));
+
+print('Min date', minDate);
+print('Max date', maxDate);
+
+//Add EVI band
+/*
+var addEVI = function(img) {
+  var evi = img.expression(
+    '2.5 * ((nir - red) / (nir + 6 * red - 7.5 * blue + 1))',
+    {
+      nir: img.select('B5'),
+      red: img.select('B4'),
+      blue: img.select('B2')
+    }
+  ).rename('EVI');
+
+  return img.addBands(evi);
+};
+
+var hlsEVI = hls.map(addEVI);
+*/
