@@ -1,56 +1,49 @@
 exports.computeGreendownDate = function(hlsEVI, year) {
-
-  // July mean
   var julyMean = hlsEVI
     .filterDate(year + '-07-01', year + '-07-31')
     .mean();
 
-  // December mean
   var decMean = hlsEVI
     .filterDate(year + '-12-01', year + '-12-31')
     .mean();
 
-  // 25% decline threshold
   var threshold = julyMean.subtract(
     julyMean.subtract(decMean).multiply(0.25)
   );
 
-  // Search period
   var collection = hlsEVI
     .filterDate(year + '-07-01', year + '-12-31')
     .sort('system:time_start');
 
   var list = collection.toList(collection.size());
+
   var n = collection.size();
 
-  var candidates = ee.ImageCollection(
-    ee.List.sequence(0, n.subtract(3)).map(function(i) {
+  var doyImages = ee.List.sequence(0, n.subtract(3)).map(function(i) {
 
-      i = ee.Number(i);
+    i = ee.Number(i);
 
-      var img1 = ee.Image(list.get(i));
-      var img2 = ee.Image(list.get(i.add(1)));
-      var img3 = ee.Image(list.get(i.add(2)));
+    var img1 = ee.Image(list.get(i));
+    var img2 = ee.Image(list.get(i.add(1)));
+    var img3 = ee.Image(list.get(i.add(2)));
 
-      var below1 = img1.select('EVI').lte(threshold);
-      var below2 = img2.select('EVI').lte(threshold);
-      var below3 = img3.select('EVI').lte(threshold);
+    var evi1 = img1.select('EVI');
+    var evi2 = img2.select('EVI');
+    var evi3 = img3.select('EVI');
 
-      var threeConsecutive = below1
-        .and(below2)
-        .and(below3);
+    var cond = evi1.lte(threshold)
+      .and(evi2.lte(threshold))
+      .and(evi3.lte(threshold));
 
-      var doy = ee.Date(img1.get('system:time_start'))
-        .getRelative('day', 'year')
-        .add(1);
+    var doy = ee.Date(img1.get('system:time_start'))
+      .getRelative('day', 'year')
+      .add(1);
 
-      return ee.Image.constant(doy)
-        .rename('DOY')
-        .updateMask(threeConsecutive)
-        .set('system:time_start', img1.get('system:time_start'));
+    return ee.Image.constant(doy)
+      .rename('DOY')
+      .updateMask(cond)
+      .set('system:time_start', img1.get('system:time_start'));
+  });
 
-    })
-  );
-
-  return candidates.min().rename('Greendown_DOY');
+  return ee.ImageCollection.fromImages(doyImages).min();
 }
