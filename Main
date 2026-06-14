@@ -3,3 +3,11 @@ var identify_locations_File = require('users/kwheeler/AppTrail_Phenology:Identif
 var MA_forest = identify_locations_File.identify_forests()
 
 var route_buffer = identify_locations_File.identify_route_buffer()
+
+var year = 2025
+
+var hlsEVI = computeHlsEVI(
+  route_buffer,
+  MA_forest,
+  2025
+);
