@@ -9,21 +9,15 @@ Map.addLayer(
   'Deciduous + Mixed Forest'
 );
 
-/*
+var route_buffer = identify_locations_File.computeRouteBuffer()
+
+Map.addLayer(route_buffer, {color: 'red'}, 'Route Buffer');
+
 //Read in Landsat HLS
-var hls = ee.ImageCollection("NASA/HLS/HLSL30/v002").select(['B5', 'B4', 'B2']);
+var hls = ee.ImageCollection("NASA/HLS/HLSL30/v002").select(['B5', 'B4', 'B2'])
+  .filterBounds(route_buffer)
+  .filterDate('2025-07-01', '2025-12-31');
 
-//var img = ee.Image(hls.first());
-//print(img.bandNames());
-
-var dates = hls.aggregate_array('system:time_start');
-
-var minDate = ee.Date(ee.Number(dates.reduce(ee.Reducer.min())));
-var maxDate = ee.Date(ee.Number(dates.reduce(ee.Reducer.max())));
-
-print('Min date', minDate);
-print('Max date', maxDate);
-*/
 
 //Add EVI band
 /*
