@@ -46,10 +46,10 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
   var thresholdValue = julyVal.subtract(
     julyVal.subtract(decVal).multiply(0.25)
   );
-  /*
+  
 
   var threshold = ee.Image.constant(thresholdValue);
-
+/*
   // ----------------------------
   // 5. Time window
   // ----------------------------
