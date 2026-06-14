@@ -1,4 +1,4 @@
-function computeGreendownDate(hlsEVI, year) {
+exports.computeGreendownDate = function(hlsEVI, year) {
 
   // July mean
   var julyMean = hlsEVI
