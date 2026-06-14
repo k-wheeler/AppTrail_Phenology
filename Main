@@ -6,12 +6,12 @@ var MA_forest = identify_locations_File.identify_forests()
 
 var route_buffer = identify_locations_File.identify_route_buffer()
 
-var year = 2025
+var year = 2024
 
 var hlsEVI = read_process_hls_File.computeHlsEVI(
   route_buffer,
   MA_forest,
-  2025
+  2024
 );
 print(hlsEVI.first());
 print(hlsEVI.first().bandNames());
@@ -26,7 +26,7 @@ Map.addLayer(
 var greendownDOY = greendown_timing_file.computeGreendownDate(
   hlsEVI,
   route_buffer,
-  2025
+  2024
 );
 print("Done")
 
