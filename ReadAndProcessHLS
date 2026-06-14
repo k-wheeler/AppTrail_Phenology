@@ -1,9 +1,5 @@
-var identify_locations_File = require('users/kwheeler/AppTrail_Phenology:IdentifyLocations')
 
-var MA_forest = identify_locations_File.identify_forests()
-
-var route_buffer = identify_locations_File.identify_route_buffer()
-
+function computeForestMask(route_buffer, MA_forest,year){
 //Read in Landsat HLS
 var hls = ee.ImageCollection("NASA/HLS/HLSL30/v002")
   .filterBounds(route_buffer)
@@ -30,6 +26,8 @@ var addEVI = function(img) {
 };
 
 var hlsEVI = hls.map(addEVI);
+return hlsEVI
+}
 
 //Mapping for QC
 /*
