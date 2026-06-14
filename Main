@@ -21,7 +21,11 @@ Map.addLayer(
   'First EVI'
 );*/
 
-var greendownDOY = greendown_timing_file.computeGreendownDate(hlsEVI, 2025);
+var greendownDOY = greendown_timing_file.computeGreendownDate(
+  hlsEVI,
+  route_buffer,
+  2025
+);
 
 Map.addLayer(
   greendownDOY,
