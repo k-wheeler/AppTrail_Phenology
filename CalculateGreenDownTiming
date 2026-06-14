@@ -87,7 +87,15 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
   // ----------------------------
   // 8. First greendown date
   // ----------------------------
-  var greendownDOY = belowThreshold.min();
+  var greendownDOY = withDOY
+  .map(function(img) {
+
+    var mask = img.select('EVI').lte(threshold);
+
+    return img.select('DOY')
+      .updateMask(mask);
+  })
+  .qualityMosaic('DOY');
 
   return greendownDOY.rename('Greendown_DOY');
 
