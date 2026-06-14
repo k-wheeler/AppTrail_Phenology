@@ -30,18 +30,40 @@ var greendownDOY = greendown_timing_file.computeGreendownDate(
 );
 print("Done")
 
-Map.addLayer(
-  greendownDOY,
-  {
-    min: 220,
-    max: 340,
-    palette: [
-      'darkgreen',
-      'green',
-      'yellow',
-      'orange',
-      'red'
-    ]
-  },
-  'Greendown DOY'
-);
+var visParams = {
+  min: 260,
+  max: 310,
+  palette: ['darkgreen', 'yellow', 'orange', 'red']
+};
+
+Map.addLayer(greendownDOY, visParams, 'Greendown DOY');
+
+// Legend
+var legend = ui.Panel({style: {position: 'bottom-left', padding: '8px 15px'}});
+
+legend.add(ui.Label({
+  value: 'Greendown DOY (2024)',
+  style: {fontWeight: 'bold', fontSize: '14px', margin: '0 0 6px 0'}
+}));
+
+var makeRow = function(color, label) {
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: color,
+      padding: '8px',
+      margin: '0 6px 4px 0'
+    }
+  });
+  var description = ui.Label({value: label, style: {margin: '0 0 4px 6px'}});
+  return ui.Panel({
+    widgets: [colorBox, description],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  });
+};
+
+legend.add(makeRow('darkgreen', 'DOY 260 (~Sep 17) — Earlier'));
+legend.add(makeRow('yellow',    'DOY 277 (~Oct 4)'));
+legend.add(makeRow('orange',    'DOY 294 (~Oct 21)'));
+legend.add(makeRow('red',       'DOY 310 (~Nov 6) — Later'));
+
+Map.add(legend);
