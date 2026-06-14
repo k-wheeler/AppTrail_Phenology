@@ -1,49 +1,49 @@
 exports.computeGreendownDate = function(hlsEVI, year) {
+  // July mean EVI
   var julyMean = hlsEVI
     .filterDate(year + '-07-01', year + '-07-31')
     .mean();
 
+  // December mean EVI
   var decMean = hlsEVI
     .filterDate(year + '-12-01', year + '-12-31')
     .mean();
 
+  // 25% decline threshold
   var threshold = julyMean.subtract(
     julyMean.subtract(decMean).multiply(0.25)
   );
 
-  var collection = hlsEVI
-    .filterDate(year + '-07-01', year + '-12-31')
-    .sort('system:time_start');
+  // Only search after July
+  var lateSeason = hlsEVI.filterDate(
+    year + '-07-01',
+    year + '-12-31'
+  );
 
-  var list = collection.toList(collection.size());
+  // Add DOY band
+  var withDOY = lateSeason.map(function(img) {
 
-  var n = collection.size();
-
-  var doyImages = ee.List.sequence(0, n.subtract(3)).map(function(i) {
-
-    i = ee.Number(i);
-
-    var img1 = ee.Image(list.get(i));
-    var img2 = ee.Image(list.get(i.add(1)));
-    var img3 = ee.Image(list.get(i.add(2)));
-
-    var evi1 = img1.select('EVI');
-    var evi2 = img2.select('EVI');
-    var evi3 = img3.select('EVI');
-
-    var cond = evi1.lte(threshold)
-      .and(evi2.lte(threshold))
-      .and(evi3.lte(threshold));
-
-    var doy = ee.Date(img1.get('system:time_start'))
+    var doy = ee.Date(img.get('system:time_start'))
       .getRelative('day', 'year')
       .add(1);
 
-    return ee.Image.constant(doy)
-      .rename('DOY')
-      .updateMask(cond)
-      .set('system:time_start', img1.get('system:time_start'));
+    return img.addBands(
+      ee.Image.constant(doy).rename('DOY')
+    );
   });
 
-  return ee.ImageCollection.fromImages(doyImages).min();
+  // Keep dates where EVI <= threshold
+  var belowThreshold = withDOY.map(function(img) {
+
+    var crossed = img.select('EVI').lte(threshold);
+
+    return img.select('DOY')
+      .updateMask(crossed)
+      .copyProperties(img, ['system:time_start']);
+  });
+
+  // First date crossing threshold
+  var greendownDOY = belowThreshold.min();
+
+  return greendownDOY.rename('Greendown_DOY');
 }
