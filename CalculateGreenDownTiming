@@ -82,7 +82,8 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
   // 7. First greendown date (robust selection)
   // ----------------------------
   var greendownDOY = masked
-    .qualityMosaic('DOY')
+    .select('DOY')
+    .min()
     .rename('Greendown_DOY')
     .clip(route_buffer);
 
