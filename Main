@@ -1,4 +1,5 @@
 var identify_locations_File = require('users/kwheeler/AppTrail_Phenology:IdentifyLocations')
+var read_process_hls_File = require('users/kwheeler/AppTrail_Phenology:ReadAndProcessHLS')
 
 var MA_forest = identify_locations_File.identify_forests()
 
@@ -6,8 +7,14 @@ var route_buffer = identify_locations_File.identify_route_buffer()
 
 var year = 2025
 
-var hlsEVI = computeHlsEVI(
+var hlsEVI = read_process_hls_File.computeHlsEVI(
   route_buffer,
   MA_forest,
   2025
+);
+
+Map.addLayer(
+  ee.Image(hlsEVI.first()).select('EVI'),
+  {min: 0, max: 1},
+  'First EVI'
 );
