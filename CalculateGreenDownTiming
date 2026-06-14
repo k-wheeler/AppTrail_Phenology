@@ -71,7 +71,6 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
       ee.Image.constant(doy).rename('DOY')
     );
   });
-  /*
 
   // ----------------------------
   // 7. Detect first threshold crossing
@@ -84,6 +83,7 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
       .updateMask(mask)
       .copyProperties(img, ['system:time_start']);
   });
+  /*
 
   // ----------------------------
   // 8. First greendown date
