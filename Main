@@ -27,7 +27,7 @@ var greendownDOY = greendown_timing_file.computeGreendownDate(
   2025
 );
 print("Done")
-/*
+
 Map.addLayer(
   greendownDOY,
   {
@@ -42,4 +42,4 @@ Map.addLayer(
     ]
   },
   'Greendown DOY'
-);*/
+);
