@@ -1,26 +1,64 @@
-exports.computeGreendownDate = function(hlsEVI, year) {
-  // July mean EVI
-  var julyMean = hlsEVI
+exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
+
+  // ----------------------------
+  // 1. Ensure only EVI band
+  // ----------------------------
+  hlsEVI = hlsEVI.select('EVI');
+
+  // ----------------------------
+  // 2. Seasonal means (images)
+  // ----------------------------
+  var julyImg = hlsEVI
     .filterDate(year + '-07-01', year + '-07-31')
     .mean();
 
-  // December mean EVI
-  var decMean = hlsEVI
+  var decImg = hlsEVI
     .filterDate(year + '-12-01', year + '-12-31')
     .mean();
 
-  // 25% decline threshold
-  var threshold = julyMean.subtract(
-    julyMean.subtract(decMean).multiply(0.25)
+  // ----------------------------
+  // 3. Convert to stable scalars
+  // (avoid empty-image issues)
+  // ----------------------------
+  var julyVal = ee.Number(
+    julyImg.reduceRegion({
+      reducer: ee.Reducer.mean(),
+      geometry: route_buffer,
+      scale: 30,
+      maxPixels: 1e13
+    }).get('EVI')
   );
 
-  // Only search after July
-  var lateSeason = hlsEVI.filterDate(
-    year + '-07-01',
-    year + '-12-31'
+  var decVal = ee.Number(
+    decImg.reduceRegion({
+      reducer: ee.Reducer.mean(),
+      geometry: route_buffer,
+      scale: 30,
+      maxPixels: 1e13
+    }).get('EVI')
   );
 
-  // Add DOY band
+  // ----------------------------
+  // 4. 25% greendown threshold
+  // (toward dormant baseline)
+  // ----------------------------
+  var thresholdValue = julyVal.subtract(
+    julyVal.subtract(decVal).multiply(0.25)
+  );
+
+  var threshold = ee.Image.constant(thresholdValue);
+
+  // ----------------------------
+  // 5. Time window
+  // ----------------------------
+  var lateSeason = hlsEVI
+    .filterDate(year + '-07-01', year + '-12-31')
+    .filterBounds(route_buffer)
+    .sort('system:time_start');
+
+  // ----------------------------
+  // 6. Add DOY band
+  // ----------------------------
   var withDOY = lateSeason.map(function(img) {
 
     var doy = ee.Date(img.get('system:time_start'))
@@ -32,18 +70,22 @@ exports.computeGreendownDate = function(hlsEVI, year) {
     );
   });
 
-  // Keep dates where EVI <= threshold
+  // ----------------------------
+  // 7. Detect first threshold crossing
+  // ----------------------------
   var belowThreshold = withDOY.map(function(img) {
 
-    var crossed = img.select('EVI').lte(threshold);
+    var mask = img.select('EVI').lte(threshold);
 
     return img.select('DOY')
-      .updateMask(crossed)
+      .updateMask(mask)
       .copyProperties(img, ['system:time_start']);
   });
 
-  // First date crossing threshold
+  // ----------------------------
+  // 8. First greendown date
+  // ----------------------------
   var greendownDOY = belowThreshold.min();
 
   return greendownDOY.rename('Greendown_DOY');
-}
+};
