@@ -15,7 +15,7 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
   var decImg = hlsEVI
     .filterDate(year + '-12-01', year + '-12-31')
     .mean();
-/*
+
   // ----------------------------
   // 3. Convert to stable scalars
   // (avoid empty-image issues)
@@ -28,7 +28,7 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
       maxPixels: 1e13
     }).get('EVI')
   );
-
+/*
   var decVal = ee.Number(
     decImg.reduceRegion({
       reducer: ee.Reducer.mean(),
