@@ -26,7 +26,8 @@ var greendownDOY = greendown_timing_file.computeGreendownDate(
   route_buffer,
   2025
 );
-
+print("Done")
+/*
 Map.addLayer(
   greendownDOY,
   {
@@ -41,4 +42,4 @@ Map.addLayer(
     ]
   },
   'Greendown DOY'
-);
+);*/
