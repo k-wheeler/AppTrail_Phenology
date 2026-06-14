@@ -83,7 +83,6 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
       .updateMask(mask)
       .copyProperties(img, ['system:time_start']);
   });
-  /*
 
   // ----------------------------
   // 8. First greendown date
@@ -91,5 +90,5 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
   var greendownDOY = belowThreshold.min();
 
   return greendownDOY.rename('Greendown_DOY');
-  */
+
 };
