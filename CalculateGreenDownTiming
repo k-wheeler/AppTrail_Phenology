@@ -4,7 +4,7 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
   // 1. Ensure only EVI band
   // ----------------------------
   hlsEVI = hlsEVI.select('EVI');
-
+/*
   // ----------------------------
   // 2. Seasonal means (images)
   // ----------------------------
@@ -88,4 +88,5 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
   var greendownDOY = belowThreshold.min();
 
   return greendownDOY.rename('Greendown_DOY');
+  */
 };
