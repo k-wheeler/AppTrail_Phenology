@@ -1,5 +1,6 @@
 var identify_locations_File = require('users/kwheeler/AppTrail_Phenology:IdentifyLocations')
 var read_process_hls_File = require('users/kwheeler/AppTrail_Phenology:ReadAndProcessHLS')
+var greendown_timing_file = require('users/kwheeler/AppTrail_Phenology:CalculateGreenDownTiming')
 
 var MA_forest = identify_locations_File.identify_forests()
 
@@ -13,8 +14,27 @@ var hlsEVI = read_process_hls_File.computeHlsEVI(
   2025
 );
 
+/*
 Map.addLayer(
   ee.Image(hlsEVI.first()).select('EVI'),
   {min: 0, max: 1},
   'First EVI'
+);*/
+
+var greendownDOY = greendown_timing_file.computeGreendownDate(hlsEVI, 2025);
+
+Map.addLayer(
+  greendownDOY,
+  {
+    min: 220,
+    max: 340,
+    palette: [
+      'darkgreen',
+      'green',
+      'yellow',
+      'orange',
+      'red'
+    ]
+  },
+  'Greendown DOY'
 );
