@@ -1,91 +1,55 @@
 exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
 
-  // ----------------------------
-  // 1. Ensure only EVI band
-  // ----------------------------
   hlsEVI = hlsEVI.select('EVI');
 
   // ----------------------------
-  // 2. Seasonal means (robust scalars)
+  // 1. Per-pixel seasonal means
   // ----------------------------
-  var julyImg = hlsEVI
+  var julyMean = hlsEVI
     .filterDate(year + '-07-01', year + '-07-31')
     .mean();
 
-  var decImg = hlsEVI
+  var decMean = hlsEVI
     .filterDate(year + '-12-01', year + '-12-31')
     .mean();
 
-  var julyVal = ee.Number(
-    julyImg.reduceRegion({
-      reducer: ee.Reducer.mean(),
-      geometry: route_buffer,
-      scale: 30,
-      maxPixels: 1e13
-    }).get('EVI')
-  );
-
-  var decVal = ee.Number(
-    decImg.reduceRegion({
-      reducer: ee.Reducer.mean(),
-      geometry: route_buffer,
-      scale: 30,
-      maxPixels: 1e13
-    }).get('EVI')
+  // ----------------------------
+  // 2. Per-pixel threshold: July mean - 75% of seasonal decline
+  // ----------------------------
+  var threshold = julyMean.subtract(
+    julyMean.subtract(decMean).multiply(0.75)
   );
 
   // ----------------------------
-  // 3. 25% decline threshold
-  // ----------------------------
-  var thresholdValue = julyVal.subtract(
-    julyVal.subtract(decVal).multiply(0.25)
-  );
-
-  var threshold = ee.Image.constant(thresholdValue);
-
-  // ----------------------------
-  // 4. Time window
+  // 3. Late-season collection with DOY band
   // ----------------------------
   var lateSeason = hlsEVI
     .filterDate(year + '-07-01', year + '-12-31')
-    .filterBounds(route_buffer)
     .sort('system:time_start');
 
-  // ----------------------------
-  // 5. Add DOY (FORCED FLOAT TYPE FIX)
-  // ----------------------------
   var withDOY = lateSeason.map(function(img) {
-
     var doy = ee.Date(img.get('system:time_start'))
       .getRelative('day', 'year')
       .add(1);
 
     return img.addBands(
-      ee.Image.constant(doy)
-        .toFloat()               // 🔥 CRITICAL FIX
-        .rename('DOY')
+      ee.Image.constant(doy).toFloat().rename('DOY')
     );
   });
 
   // ----------------------------
-  // 6. Apply threshold mask
+  // 4. Mask to only pixels where EVI has crossed below per-pixel threshold
   // ----------------------------
   var masked = withDOY.map(function(img) {
-
-    var mask = img.select('EVI').lte(threshold);
-
-    return img.select('DOY')
-      .updateMask(mask);
+    var belowThreshold = img.select('EVI').lte(threshold);
+    return img.select('DOY').updateMask(belowThreshold);
   });
 
   // ----------------------------
-  // 7. First greendown date (robust selection)
+  // 5. First (minimum) DOY where EVI crossed threshold, clipped to route
   // ----------------------------
-  var greendownDOY = masked
-    .select('DOY')
+  return masked
     .min()
     .rename('Greendown_DOY')
     .clip(route_buffer);
-
-  return greendownDOY;
 };
