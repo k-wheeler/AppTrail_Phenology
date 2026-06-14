@@ -13,6 +13,8 @@ var hlsEVI = read_process_hls_File.computeHlsEVI(
   MA_forest,
   2025
 );
+print(hlsEVI.first());
+print(hlsEVI.first().bandNames());
 
 /*
 Map.addLayer(
