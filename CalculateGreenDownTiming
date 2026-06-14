@@ -4,7 +4,7 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
   // 1. Ensure only EVI band
   // ----------------------------
   hlsEVI = hlsEVI.select('EVI');
-/*
+
   // ----------------------------
   // 2. Seasonal means (images)
   // ----------------------------
@@ -15,7 +15,7 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
   var decImg = hlsEVI
     .filterDate(year + '-12-01', year + '-12-31')
     .mean();
-
+/*
   // ----------------------------
   // 3. Convert to stable scalars
   // (avoid empty-image issues)
