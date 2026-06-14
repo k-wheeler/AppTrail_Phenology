@@ -49,7 +49,7 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
   
 
   var threshold = ee.Image.constant(thresholdValue);
-/*
+
   // ----------------------------
   // 5. Time window
   // ----------------------------
@@ -71,6 +71,7 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
       ee.Image.constant(doy).rename('DOY')
     );
   });
+  /*
 
   // ----------------------------
   // 7. Detect first threshold crossing
