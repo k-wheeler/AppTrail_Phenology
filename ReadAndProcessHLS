@@ -3,24 +3,30 @@ var identify_locations_File = require('users/kwheeler/AppTrail_Phenology:Identif
 
 var MA_forest = identify_locations_File.identify_forests()
 
+/*
 Map.addLayer(
   MA_forest.selfMask(),
   {palette: ['green']},
   'Deciduous + Mixed Forest'
-);
+);*/
 
-var route_buffer = identify_locations_File.computeRouteBuffer()
+var route_buffer = identify_locations_File.identify_route_buffer()
 
-Map.addLayer(route_buffer, {color: 'red'}, 'Route Buffer');
+//Map.addLayer(route_buffer, {color: 'red'}, 'Route Buffer');
 
 //Read in Landsat HLS
-var hls = ee.ImageCollection("NASA/HLS/HLSL30/v002").select(['B5', 'B4', 'B2'])
+var hls = ee.ImageCollection("NASA/HLS/HLSL30/v002")
   .filterBounds(route_buffer)
-  .filterDate('2025-07-01', '2025-12-31');
-
+  .filterDate('2025-07-01', '2025-12-31')
+  .select(['B5', 'B4', 'B2'])
+  .map(function(img) {
+    return img
+      .clip(route_buffer)
+      .updateMask(MA_forest);
+  });
 
 //Add EVI band
-/*
+
 var addEVI = function(img) {
   var evi = img.expression(
     '2.5 * ((nir - red) / (nir + 6 * red - 7.5 * blue + 1))',
@@ -35,4 +41,10 @@ var addEVI = function(img) {
 };
 
 var hlsEVI = hls.map(addEVI);
-*/
+print("Done")
+
+Map.addLayer(
+  ee.Image(hlsEVI.first()).select('EVI'),
+  {min: 0, max: 1},
+  'First EVI'
+);
