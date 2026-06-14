@@ -1,4 +1,4 @@
-function computeHlsEVI(route_buffer, MA_forest, year) {
+exports.computeHlsEVI = function(route_buffer, MA_forest, year) {
 
   var startDate = year + '-07-01';
   var endDate = year + '-12-31';
