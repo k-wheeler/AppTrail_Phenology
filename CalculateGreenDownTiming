@@ -6,7 +6,7 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
   hlsEVI = hlsEVI.select('EVI');
 
   // ----------------------------
-  // 2. Seasonal means (images)
+  // 2. Seasonal means (robust scalars)
   // ----------------------------
   var julyImg = hlsEVI
     .filterDate(year + '-07-01', year + '-07-31')
@@ -16,10 +16,6 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
     .filterDate(year + '-12-01', year + '-12-31')
     .mean();
 
-  // ----------------------------
-  // 3. Convert to stable scalars
-  // (avoid empty-image issues)
-  // ----------------------------
   var julyVal = ee.Number(
     julyImg.reduceRegion({
       reducer: ee.Reducer.mean(),
@@ -37,21 +33,18 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
       maxPixels: 1e13
     }).get('EVI')
   );
-  
 
   // ----------------------------
-  // 4. 25% greendown threshold
-  // (toward dormant baseline)
+  // 3. 25% decline threshold
   // ----------------------------
   var thresholdValue = julyVal.subtract(
     julyVal.subtract(decVal).multiply(0.25)
   );
-  
 
   var threshold = ee.Image.constant(thresholdValue);
 
   // ----------------------------
-  // 5. Time window
+  // 4. Time window
   // ----------------------------
   var lateSeason = hlsEVI
     .filterDate(year + '-07-01', year + '-12-31')
@@ -59,7 +52,7 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
     .sort('system:time_start');
 
   // ----------------------------
-  // 6. Add DOY band
+  // 5. Add DOY (FORCED FLOAT TYPE FIX)
   // ----------------------------
   var withDOY = lateSeason.map(function(img) {
 
@@ -68,35 +61,29 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
       .add(1);
 
     return img.addBands(
-      ee.Image.constant(doy).rename('DOY')
+      ee.Image.constant(doy)
+        .toFloat()               // 🔥 CRITICAL FIX
+        .rename('DOY')
     );
   });
 
   // ----------------------------
-  // 7. Detect first threshold crossing
+  // 6. Apply threshold mask
   // ----------------------------
-  var belowThreshold = withDOY.map(function(img) {
-
-    var mask = img.select('EVI').lte(threshold);
-
-    return img.select('DOY')
-      .updateMask(mask)
-      .copyProperties(img, ['system:time_start']);
-  });
-
-  // ----------------------------
-  // 8. First greendown date
-  // ----------------------------
-  var greendownDOY = withDOY
-  .map(function(img) {
+  var masked = withDOY.map(function(img) {
 
     var mask = img.select('EVI').lte(threshold);
 
     return img.select('DOY')
       .updateMask(mask);
-  })
-  .qualityMosaic('DOY');
+  });
 
-  return greendownDOY.rename('Greendown_DOY');
+  // ----------------------------
+  // 7. First greendown date (robust selection)
+  // ----------------------------
+  var greendownDOY = masked
+    .qualityMosaic('DOY')
+    .rename('Greendown_DOY');
 
+  return greendownDOY;
 };
