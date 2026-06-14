@@ -1,18 +1,8 @@
 var identify_locations_File = require('users/kwheeler/AppTrail_Phenology:IdentifyLocations')
 
-
 var MA_forest = identify_locations_File.identify_forests()
 
-/*
-Map.addLayer(
-  MA_forest.selfMask(),
-  {palette: ['green']},
-  'Deciduous + Mixed Forest'
-);*/
-
 var route_buffer = identify_locations_File.identify_route_buffer()
-
-//Map.addLayer(route_buffer, {color: 'red'}, 'Route Buffer');
 
 //Read in Landsat HLS
 var hls = ee.ImageCollection("NASA/HLS/HLSL30/v002")
@@ -26,7 +16,6 @@ var hls = ee.ImageCollection("NASA/HLS/HLSL30/v002")
   });
 
 //Add EVI band
-
 var addEVI = function(img) {
   var evi = img.expression(
     '2.5 * ((nir - red) / (nir + 6 * red - 7.5 * blue + 1))',
@@ -41,10 +30,19 @@ var addEVI = function(img) {
 };
 
 var hlsEVI = hls.map(addEVI);
-print("Done")
+
+//Mapping for QC
+/*
+Map.addLayer(
+  MA_forest.selfMask(),
+  {palette: ['green']},
+  'Deciduous + Mixed Forest'
+);
+
+Map.addLayer(route_buffer, {color: 'red'}, 'Route Buffer');
 
 Map.addLayer(
   ee.Image(hlsEVI.first()).select('EVI'),
   {min: 0, max: 1},
   'First EVI'
-);
+);*/
