@@ -28,7 +28,7 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
       maxPixels: 1e13
     }).get('EVI')
   );
-/*
+
   var decVal = ee.Number(
     decImg.reduceRegion({
       reducer: ee.Reducer.mean(),
@@ -37,6 +37,7 @@ exports.computeGreendownDate = function(hlsEVI, route_buffer, year) {
       maxPixels: 1e13
     }).get('EVI')
   );
+  /*
 
   // ----------------------------
   // 4. 25% greendown threshold
