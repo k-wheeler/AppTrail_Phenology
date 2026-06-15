@@ -3,67 +3,83 @@ var read_process_hls_File = require('users/kwheeler/AppTrail_Phenology:ReadAndPr
 var greendown_timing_file = require('users/kwheeler/AppTrail_Phenology:CalculateGreenDownTiming')
 
 var MA_forest = identify_locations_File.identify_forests()
-
 var route_buffer = identify_locations_File.identify_route_buffer()
 
-var year = 2024
+// Dynamic year: most recent completed year
+var previousYear = new Date().getFullYear() - 1;
+var startYear = previousYear - 14; // 15-year window
 
-var hlsEVI = read_process_hls_File.computeHlsEVI(
-  route_buffer,
-  MA_forest,
-  2024
-);
-print(hlsEVI.first());
-print(hlsEVI.first().bandNames());
+// ----------------------------
+// Previous year greendown
+// ----------------------------
+var hlsEVI_prev = read_process_hls_File.computeHlsEVI(route_buffer, MA_forest, previousYear);
+var greendownPrevYear = greendown_timing_file.computeGreendownDate(hlsEVI_prev, route_buffer, previousYear);
 
-/*
-Map.addLayer(
-  ee.Image(hlsEVI.first()).select('EVI'),
-  {min: 0, max: 1},
-  'First EVI'
-);*/
+// ----------------------------
+// 15-year average greendown
+// ----------------------------
+var yearList = [];
+for (var y = startYear; y <= previousYear; y++) {
+  yearList.push(y);
+}
 
-var greendownDOY = greendown_timing_file.computeGreendownDate(
-  hlsEVI,
-  route_buffer,
-  2024
-);
-print("Done")
+var greendownImages = yearList.map(function(y) {
+  var hls = read_process_hls_File.computeHlsEVI(route_buffer, MA_forest, y);
+  return greendown_timing_file.computeGreendownDate(hls, route_buffer, y);
+});
 
+var greendownAvg = ee.ImageCollection(greendownImages)
+  .mean()
+  .rename('Greendown_DOY_Avg')
+  .clip(route_buffer);
+
+// ----------------------------
+// Visualization
+// ----------------------------
 var visParams = {
   min: 260,
   max: 310,
   palette: ['darkgreen', 'yellow', 'orange', 'red']
 };
 
-Map.addLayer(greendownDOY, visParams, 'Greendown DOY');
+Map.addLayer(greendownAvg,     visParams, startYear + '–' + previousYear + ' Avg Greendown DOY');
+Map.addLayer(greendownPrevYear, visParams, previousYear + ' Greendown DOY');
 
+// ----------------------------
 // Legend
+// ----------------------------
 var legend = ui.Panel({style: {position: 'bottom-left', padding: '8px 15px'}});
 
 legend.add(ui.Label({
-  value: 'Greendown DOY (2024)',
-  style: {fontWeight: 'bold', fontSize: '14px', margin: '0 0 6px 0'}
+  value: 'Greendown DOY',
+  style: {fontWeight: 'bold', fontSize: '14px', margin: '0 0 2px 0'}
+}));
+legend.add(ui.Label({
+  value: '(Both layers share this scale)',
+  style: {fontSize: '11px', color: 'gray', margin: '0 0 8px 0'}
 }));
 
-var makeRow = function(color, label) {
-  var colorBox = ui.Label({
-    style: {
-      backgroundColor: color,
-      padding: '8px',
-      margin: '0 6px 4px 0'
-    }
-  });
-  var description = ui.Label({value: label, style: {margin: '0 0 4px 6px'}});
-  return ui.Panel({
-    widgets: [colorBox, description],
-    layout: ui.Panel.Layout.Flow('horizontal')
-  });
-};
+var palette = visParams.palette;
+var minVal  = visParams.min;
+var maxVal  = visParams.max;
+var steps   = palette.length;
 
-legend.add(makeRow('darkgreen', 'DOY 260 (~Sep 17) — Earlier'));
-legend.add(makeRow('yellow',    'DOY 277 (~Oct 4)'));
-legend.add(makeRow('orange',    'DOY 294 (~Oct 21)'));
-legend.add(makeRow('red',       'DOY 310 (~Nov 6) — Later'));
+palette.forEach(function(color, i) {
+  var doy   = Math.round(minVal + (i / (steps - 1)) * (maxVal - minVal));
+  var month = Math.floor((doy - 1) / 30.44) + 1;
+  var day   = Math.round((doy - 1) % 30.44) + 1;
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var label = 'DOY ' + doy + ' (~' + months[month - 1] + ' ' + day + ')' +
+              (i === 0 ? ' — Earlier' : i === steps - 1 ? ' — Later' : '');
+
+  var colorBox = ui.Label({
+    style: {backgroundColor: color, padding: '8px', margin: '0 6px 4px 0'}
+  });
+  var desc = ui.Label({value: label, style: {margin: '0 0 4px 6px'}});
+  legend.add(ui.Panel({
+    widgets: [colorBox, desc],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  }));
+});
 
 Map.add(legend);
