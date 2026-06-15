@@ -7,7 +7,7 @@ var route_buffer = identify_locations_File.identify_route_buffer()
 
 // Dynamic year: most recent completed year
 var previousYear = new Date().getFullYear() - 1;
-var startYear = previousYear - 14; // 15-year window
+var startYear = Math.max(previousYear - 14, 2013); // HLS data begins 2013
 
 // ----------------------------
 // Previous year greendown
