@@ -46,56 +46,102 @@ def _fit_pixel(doys, values):
 
 
 # ----------------------------
-# Per-year fitting
+# Export helpers
 # ----------------------------
 
-def compute_transition_dates(hls_evi_collection, route_buffer, ma_forest, year, output_dir='.'):
+def _export_stack(collection, ma_forest, route_buffer, year, output_dir):
     """
-    Export Jul-Dec EVI stack from GEE, fit a decreasing logistic per forest
-    pixel, and save three GeoTIFFs representing the DOY of the start, middle,
-    and end of the greendown transition (extrema of d(curvature)/dt).
-
-    Returns a dict: {'start': path, 'middle': path, 'end': path}
+    Export EVI images one at a time (each ~20MB, under the 50MB limit)
+    and stack into a numpy array. Caches results to disk.
     """
-    collection = hls_evi_collection.sort('system:time_start')
+    stack_path = os.path.join(output_dir, f'hls_evi_stack_{year}.npy')
+    doys_path  = os.path.join(output_dir, f'hls_evi_doys_{year}.npy')
+    ref_path   = os.path.join(output_dir, f'hls_evi_ref_{year}.tif')
 
-    # Get DOY for each image
+    if os.path.exists(stack_path) and os.path.exists(doys_path):
+        print(f'  Loading cached stack for {year}')
+        return np.load(stack_path), np.load(doys_path), ref_path
+
     timestamps = collection.aggregate_array('system:time_start').getInfo()
     doys = np.array([
         datetime.datetime.utcfromtimestamp(ts / 1000).timetuple().tm_yday
         for ts in timestamps
     ])
+    n = len(doys)
 
-    if len(doys) < 4:
-        raise ValueError(f'Too few images ({len(doys)}) for {year} — cannot fit logistic')
+    if n < 4:
+        raise ValueError(f'Too few images ({n}) for {year}')
 
-    # Export masked EVI stack to a local GeoTIFF
-    stacked = collection.toBands().updateMask(ma_forest)
-    stack_path = os.path.join(output_dir, f'hls_evi_stack_{year}.tif')
-    print(f'  Exporting EVI stack for {year} ({len(doys)} images)...')
-    geemap.ee_export_image(
-        stacked,
-        filename=stack_path,
-        scale=30,
-        region=route_buffer,
-        file_per_band=False
-    )
+    image_list = collection.toList(n)
+    arrays  = []
+    profile = None
 
-    # Read stack
-    with rasterio.open(stack_path) as src:
-        arr = src.read().astype(float)   # (n_bands, height, width)
-        nodata = src.nodata
-        profile = src.profile
+    print(f'  Exporting {n} images for {year} (one at a time)...')
+    for i in range(n):
+        img = ee.Image(image_list.get(i)).select('EVI').updateMask(ma_forest)
+        tmp_path = os.path.join(output_dir, f'_tmp_{year}_{i:03d}.tif')
 
-    if nodata is not None:
-        arr[arr == nodata] = np.nan
+        geemap.ee_export_image(
+            img,
+            filename=tmp_path,
+            scale=30,
+            region=route_buffer,
+            file_per_band=False
+        )
 
-    n_bands, h, w = arr.shape
+        with rasterio.open(tmp_path) as src:
+            data = src.read(1).astype(float)
+            nodata = src.nodata
+            if nodata is not None:
+                data[data == nodata] = np.nan
+            arrays.append(data)
+            if profile is None:
+                profile = src.profile
+                # Save reference GeoTIFF for spatial metadata
+                with rasterio.open(ref_path, 'w', **profile) as dst:
+                    dst.write(src.read(1), 1)
+
+        os.remove(tmp_path)
+        print(f'    {i + 1}/{n}', end='\r')
+
+    print()
+    arr = np.stack(arrays, axis=0)  # (n_images, height, width)
+    np.save(stack_path, arr)
+    np.save(doys_path, doys)
+
+    return arr, doys, ref_path
+
+
+# ----------------------------
+# Per-year fitting
+# ----------------------------
+
+def compute_transition_dates(hls_evi_collection, route_buffer, ma_forest, year, output_dir='.'):
+    """
+    Export Jul-Dec EVI per image from GEE, fit a decreasing logistic per forest
+    pixel, and save three GeoTIFFs: start, middle, end of greendown (as DOY).
+
+    Results are cached — re-running skips already-completed years.
+    Returns a dict: {'start': path, 'middle': path, 'end': path}
+    """
+    paths = {
+        phase: os.path.join(output_dir, f'greendown_{phase}_{year}.tif')
+        for phase in ('start', 'middle', 'end')
+    }
+
+    if all(os.path.exists(p) for p in paths.values()):
+        print(f'  Using cached results for {year}')
+        return paths
+
+    collection = hls_evi_collection.sort('system:time_start')
+    arr, doys, ref_path = _export_stack(collection, ma_forest, route_buffer, year, output_dir)
+
+    _, h, w = arr.shape
     t_start  = np.full((h, w), np.nan, dtype=np.float32)
     t_middle = np.full((h, w), np.nan, dtype=np.float32)
     t_end    = np.full((h, w), np.nan, dtype=np.float32)
 
-    print(f'  Fitting logistic curves for {year} ({h}x{w} pixels)...')
+    print(f'  Fitting logistic curves for {year}...')
     for i in range(h):
         for j in range(w):
             popt = _fit_pixel(doys, arr[:, i, j])
@@ -106,17 +152,14 @@ def compute_transition_dates(hls_evi_collection, route_buffer, ma_forest, year, 
                 t_middle[i, j] = m
                 t_end[i, j]    = e
 
-    # Save result GeoTIFFs
-    out_profile = profile.copy()
+    with rasterio.open(ref_path) as src:
+        out_profile = src.profile.copy()
     out_profile.update(count=1, dtype='float32', nodata=-9999.0)
 
-    paths = {}
-    for name, data in [('start', t_start), ('middle', t_middle), ('end', t_end)]:
+    for phase, data in [('start', t_start), ('middle', t_middle), ('end', t_end)]:
         data[np.isnan(data)] = -9999.0
-        path = os.path.join(output_dir, f'greendown_{name}_{year}.tif')
-        with rasterio.open(path, 'w', **out_profile) as dst:
+        with rasterio.open(paths[phase], 'w', **out_profile) as dst:
             dst.write(data, 1)
-        paths[name] = path
 
     print(f'  Done: {year}')
     return paths
@@ -135,7 +178,7 @@ def compute_average_transition_dates(paths_by_year, output_dir='.'):
     """
     avg_paths = {}
     for phase in ('start', 'middle', 'end'):
-        arrays = []
+        arrays  = []
         profile = None
         for paths in paths_by_year:
             with rasterio.open(paths[phase]) as src:
