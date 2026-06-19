@@ -6,6 +6,8 @@ import geemap
 import rasterio
 from scipy.optimize import curve_fit
 
+N_CI_SAMPLES = 200  # Monte Carlo samples for confidence intervals
+
 
 # ----------------------------
 # Logistic model
@@ -27,22 +29,94 @@ def _curvature_extrema_doys(k, t_mid):
 
 
 def _fit_pixel(doys, values):
-    """Fit a decreasing logistic to one pixel's time series. Returns params or None."""
+    """
+    Fit a decreasing logistic to one pixel's time series.
+    Returns (popt, pcov) or None if fit fails.
+    """
     valid = np.isfinite(values) & (values > 0)
     if valid.sum() < 4:
         return None
     t = doys[valid].astype(float)
     y = values[valid].astype(float)
     try:
-        popt, _ = curve_fit(
+        popt, pcov = curve_fit(
             _decreasing_logistic, t, y,
             p0=[y.max() - y.min(), 0.1, float(t[len(t) // 2]), y.min()],
             bounds=([0, 0.01, 150, -0.5], [1.5, 1.0, 365, 1.0]),
             maxfev=5000
         )
-        return popt
+        # Reject fits with non-finite covariance (poorly constrained)
+        if not np.all(np.isfinite(pcov)):
+            return popt, None
+        return popt, pcov
     except Exception:
         return None
+
+
+def _sample_params(popt, pcov, n=N_CI_SAMPLES):
+    """
+    Draw n parameter sets from the multivariate normal defined by
+    the curve_fit result. Returns array (n, 4) or None.
+    """
+    try:
+        samples = np.random.multivariate_normal(popt, pcov, size=n)
+        # Keep only samples with positive k (physically required)
+        samples = samples[samples[:, 1] > 0]
+        return samples if len(samples) >= 10 else None
+    except (np.linalg.LinAlgError, ValueError):
+        return None
+
+
+def compute_curve_ci(popt, pcov, t):
+    """
+    95% CI band for the fitted logistic at times t.
+    Returns (fitted, lower, upper).
+    """
+    fitted = _decreasing_logistic(t, *popt)
+    if pcov is None:
+        return fitted, fitted, fitted
+
+    samples = _sample_params(popt, pcov)
+    if samples is None:
+        return fitted, fitted, fitted
+
+    curves = np.array([_decreasing_logistic(t, *p) for p in samples])
+    return fitted, np.percentile(curves, 2.5, axis=0), np.percentile(curves, 97.5, axis=0)
+
+
+def compute_transition_dates_ci(popt, pcov):
+    """
+    Point estimates and 95% CI for the three transition DOYs.
+    Returns dict with keys 'start', 'middle', 'end', each a tuple
+    (point, lower, upper).
+    """
+    s, m, e = _curvature_extrema_doys(popt[1], popt[2])
+
+    if pcov is None:
+        return {
+            'start':  (s, s, s),
+            'middle': (m, m, m),
+            'end':    (e, e, e),
+        }
+
+    samples = _sample_params(popt, pcov)
+    if samples is None:
+        return {
+            'start':  (s, s, s),
+            'middle': (m, m, m),
+            'end':    (e, e, e),
+        }
+
+    all_dates = np.array([_curvature_extrema_doys(p[1], p[2]) for p in samples])
+    result = {}
+    for i, phase in enumerate(('start', 'middle', 'end')):
+        d = all_dates[:, i]
+        result[phase] = (
+            _curvature_extrema_doys(popt[1], popt[2])[i],  # point estimate
+            float(np.percentile(d, 2.5)),
+            float(np.percentile(d, 97.5)),
+        )
+    return result
 
 
 # ----------------------------
@@ -97,7 +171,6 @@ def _export_stack(collection, ma_forest, route_buffer, year, output_dir):
             arrays.append(data)
             if profile is None:
                 profile = src.profile
-                # Save reference GeoTIFF for spatial metadata
                 with rasterio.open(ref_path, 'w', **profile) as dst:
                     dst.write(src.read(1), 1)
 
@@ -119,50 +192,68 @@ def _export_stack(collection, ma_forest, route_buffer, year, output_dir):
 def compute_transition_dates(hls_evi_collection, route_buffer, ma_forest, year, output_dir='.'):
     """
     Export Jul-Dec EVI per image from GEE, fit a decreasing logistic per forest
-    pixel, and save three GeoTIFFs: start, middle, end of greendown (as DOY).
+    pixel, and save GeoTIFFs for the point estimate and 95% CI of each of the
+    three greendown transition dates (start, middle, end).
+
+    Output files per year (9 total):
+      greendown_{phase}_{year}.tif            — point estimate
+      greendown_{phase}_ci_lower_{year}.tif   — 2.5th percentile
+      greendown_{phase}_ci_upper_{year}.tif   — 97.5th percentile
 
     Results are cached — re-running skips already-completed years.
-    Returns a dict: {'start': path, 'middle': path, 'end': path}
+    Returns a dict: {'start': path, 'middle': path, 'end': path}  (point estimates)
     """
-    paths = {
-        phase: os.path.join(output_dir, f'greendown_{phase}_{year}.tif')
-        for phase in ('start', 'middle', 'end')
-    }
+    phases = ('start', 'middle', 'end')
+    point_paths = {p: os.path.join(output_dir, f'greendown_{p}_{year}.tif')         for p in phases}
+    lower_paths = {p: os.path.join(output_dir, f'greendown_{p}_ci_lower_{year}.tif') for p in phases}
+    upper_paths = {p: os.path.join(output_dir, f'greendown_{p}_ci_upper_{year}.tif') for p in phases}
 
-    if all(os.path.exists(p) for p in paths.values()):
+    all_paths = list(point_paths.values()) + list(lower_paths.values()) + list(upper_paths.values())
+    if all(os.path.exists(p) for p in all_paths):
         print(f'  Using cached results for {year}')
-        return paths
+        return point_paths
 
     collection = hls_evi_collection.sort('system:time_start')
     arr, doys, ref_path = _export_stack(collection, ma_forest, route_buffer, year, output_dir)
 
     _, h, w = arr.shape
-    t_start  = np.full((h, w), np.nan, dtype=np.float32)
-    t_middle = np.full((h, w), np.nan, dtype=np.float32)
-    t_end    = np.full((h, w), np.nan, dtype=np.float32)
+    results = {
+        phase: {
+            'point': np.full((h, w), np.nan, dtype=np.float32),
+            'lower': np.full((h, w), np.nan, dtype=np.float32),
+            'upper': np.full((h, w), np.nan, dtype=np.float32),
+        }
+        for phase in phases
+    }
 
-    print(f'  Fitting logistic curves for {year}...')
+    print(f'  Fitting logistic curves with CIs for {year}...')
     for i in range(h):
         for j in range(w):
-            popt = _fit_pixel(doys, arr[:, i, j])
-            if popt is not None:
-                _, k, t_m, _ = popt
-                s, m, e = _curvature_extrema_doys(k, t_m)
-                t_start[i, j]  = s
-                t_middle[i, j] = m
-                t_end[i, j]    = e
+            fit = _fit_pixel(doys, arr[:, i, j])
+            if fit is None:
+                continue
+            popt, pcov = fit
+            ci = compute_transition_dates_ci(popt, pcov)
+            for phase in phases:
+                results[phase]['point'][i, j] = ci[phase][0]
+                results[phase]['lower'][i, j] = ci[phase][1]
+                results[phase]['upper'][i, j] = ci[phase][2]
 
     with rasterio.open(ref_path) as src:
         out_profile = src.profile.copy()
     out_profile.update(count=1, dtype='float32', nodata=-9999.0)
 
-    for phase, data in [('start', t_start), ('middle', t_middle), ('end', t_end)]:
-        data[np.isnan(data)] = -9999.0
-        with rasterio.open(paths[phase], 'w', **out_profile) as dst:
-            dst.write(data, 1)
+    for phase in phases:
+        for key, path in [('point', point_paths[phase]),
+                          ('lower', lower_paths[phase]),
+                          ('upper', upper_paths[phase])]:
+            data = results[phase][key]
+            data[np.isnan(data)] = -9999.0
+            with rasterio.open(path, 'w', **out_profile) as dst:
+                dst.write(data, 1)
 
     print(f'  Done: {year}')
-    return paths
+    return point_paths
 
 
 # ----------------------------
@@ -171,7 +262,7 @@ def compute_transition_dates(hls_evi_collection, route_buffer, ma_forest, year, 
 
 def compute_average_transition_dates(paths_by_year, output_dir='.'):
     """
-    Pixel-wise mean of start/middle/end transition GeoTIFFs across years.
+    Pixel-wise mean of start/middle/end point-estimate GeoTIFFs across years.
 
     paths_by_year: list of dicts returned by compute_transition_dates.
     Returns dict: {'start': path, 'middle': path, 'end': path}
