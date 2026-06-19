@@ -53,13 +53,24 @@ def _fit_pixel(doys, values):
         return None
 
 
+def _make_psd(pcov):
+    """
+    Force a covariance matrix to be positive semi-definite by clipping
+    negative eigenvalues to zero, then reconstructing.
+    """
+    eigvals, eigvecs = np.linalg.eigh(pcov)
+    eigvals = np.clip(eigvals, 0, None)
+    return eigvecs @ np.diag(eigvals) @ eigvecs.T
+
+
 def _sample_params(popt, pcov, n=N_CI_SAMPLES):
     """
     Draw n parameter sets from the multivariate normal defined by
     the curve_fit result. Returns array (n, 4) or None.
     """
     try:
-        samples = np.random.multivariate_normal(popt, pcov, size=n)
+        pcov_psd = _make_psd(pcov)
+        samples  = np.random.multivariate_normal(popt, pcov_psd, size=n)
         # Keep only samples with positive k (physically required)
         samples = samples[samples[:, 1] > 0]
         return samples if len(samples) >= 10 else None
