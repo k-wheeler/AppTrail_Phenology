@@ -250,6 +250,21 @@ def compute_transition_dates(hls_evi_collection, route_buffer, ma_forest, year, 
                 results[phase]['lower'][i, j] = ci[phase][1]
                 results[phase]['upper'][i, j] = ci[phase][2]
 
+    # Clip CI bounds to the analysis window
+    jul1_doy  = datetime.date(year, 7,  1).timetuple().tm_yday
+    dec31_doy = datetime.date(year, 12, 31).timetuple().tm_yday
+    for phase in phases:
+        results[phase]['lower'] = np.where(
+            np.isfinite(results[phase]['lower']),
+            np.clip(results[phase]['lower'], jul1_doy, None),
+            np.nan
+        )
+        results[phase]['upper'] = np.where(
+            np.isfinite(results[phase]['upper']),
+            np.clip(results[phase]['upper'], None, dec31_doy),
+            np.nan
+        )
+
     with rasterio.open(ref_path) as src:
         out_profile = src.profile.copy()
     out_profile.update(count=1, dtype='float32', nodata=-9999.0)
