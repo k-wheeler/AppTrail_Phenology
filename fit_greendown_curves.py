@@ -92,7 +92,9 @@ def compute_curve_ci(popt, pcov, t):
         return fitted, fitted, fitted
 
     curves = np.array([_decreasing_logistic(t, *p) for p in samples])
-    return fitted, np.percentile(curves, 2.5, axis=0), np.percentile(curves, 97.5, axis=0)
+    lower  = np.clip(np.percentile(curves, 2.5,  axis=0), 0, None)
+    upper  = np.clip(np.percentile(curves, 97.5, axis=0), 0, None)
+    return fitted, lower, upper
 
 
 def compute_transition_dates_ci(popt, pcov):
