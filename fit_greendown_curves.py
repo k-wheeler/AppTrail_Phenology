@@ -139,12 +139,12 @@ def compute_transition_dates_ci(popt, pcov):
 
 def _export_stack(collection, ma_forest, route_buffer, year, output_dir):
     """
-    Export EVI images one at a time (each ~20MB, under the 50MB limit)
+    Export EVI and NDVI images one at a time (each ~20MB, under the 50MB limit)
     and stack into a numpy array. Caches results to disk.
     """
-    stack_path = os.path.join(output_dir, f'hls_evi_stack_{year}.npy')
-    doys_path  = os.path.join(output_dir, f'hls_evi_doys_{year}.npy')
-    ref_path   = os.path.join(output_dir, f'hls_evi_ref_{year}.tif')
+    stack_path = os.path.join(output_dir, f'hls_indices_stack_{year}.npy')
+    doys_path  = os.path.join(output_dir, f'hls_indices_doys_{year}.npy')
+    ref_path   = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
 
     if os.path.exists(stack_path) and os.path.exists(doys_path):
         print(f'  Loading cached stack for {year}')
@@ -166,33 +166,41 @@ def _export_stack(collection, ma_forest, route_buffer, year, output_dir):
 
     print(f'  Exporting {n} images for {year} (one at a time)...')
     for i in range(n):
-        img = ee.Image(image_list.get(i)).select('EVI').updateMask(ma_forest)
+        img = ee.Image(image_list.get(i)).select(['EVI', 'NDVI']).updateMask(ma_forest)
         tmp_path = os.path.join(output_dir, f'_tmp_{year}_{i:03d}.tif')
 
-        geemap.ee_export_image(
-            img,
-            filename=tmp_path,
-            scale=30,
-            region=route_buffer,
-            file_per_band=False
-        )
+        for attempt in range(3):
+            geemap.ee_export_image(
+                img,
+                filename=tmp_path,
+                scale=30,
+                region=route_buffer,
+                file_per_band=False
+            )
+            if os.path.exists(tmp_path):
+                break
+            print(f'    Download failed (attempt {attempt + 1}/3), retrying...')
+        else:
+            raise RuntimeError(f'Download failed after 3 attempts: year={year}, image={i + 1}/{n}')
 
         with rasterio.open(tmp_path) as src:
-            data = src.read(1).astype(float)
+            data = src.read().astype(float)  # (n_bands, h, w): band 0=EVI, band 1=NDVI
             nodata = src.nodata
             if nodata is not None:
                 data[data == nodata] = np.nan
             arrays.append(data)
             if profile is None:
                 profile = src.profile
-                with rasterio.open(ref_path, 'w', **profile) as dst:
-                    dst.write(src.read(1), 1)
+                ref_profile = src.profile.copy()
+                ref_profile.update(count=1)
+                with rasterio.open(ref_path, 'w', **ref_profile) as dst:
+                    dst.write(src.read(1), 1)  # write EVI band for spatial reference
 
         os.remove(tmp_path)
         print(f'    {i + 1}/{n}', end='\r')
 
     print()
-    arr = np.stack(arrays, axis=0)  # (n_images, height, width)
+    arr = np.stack(arrays, axis=0)  # (n_images, n_bands, height, width): band 0=EVI, band 1=NDVI
     np.save(stack_path, arr)
     np.save(doys_path, doys)
 
@@ -203,10 +211,10 @@ def _export_stack(collection, ma_forest, route_buffer, year, output_dir):
 # Per-year fitting
 # ----------------------------
 
-def compute_transition_dates(hls_evi_collection, route_buffer, ma_forest, year, output_dir='.'):
+def compute_transition_dates(hls_indices_collection, route_buffer, ma_forest, year, output_dir='.'):
     """
-    Export Jul-Dec EVI per image from GEE, fit a decreasing logistic per forest
-    pixel, and save GeoTIFFs for the point estimate and 95% CI of each of the
+    Export Jul-Dec EVI and NDVI per image from GEE, fit a decreasing logistic per forest
+    pixel using EVI only, and save GeoTIFFs for the point estimate and 95% CI of each of the
     three greendown transition dates (start, middle, end).
 
     Output files per year (12 total):
@@ -230,10 +238,10 @@ def compute_transition_dates(hls_evi_collection, route_buffer, ma_forest, year, 
         print(f'  Using cached results for {year}')
         return point_paths
 
-    collection = hls_evi_collection.sort('system:time_start')
+    collection = hls_indices_collection.sort('system:time_start')
     arr, doys, ref_path = _export_stack(collection, ma_forest, route_buffer, year, output_dir)
 
-    _, h, w = arr.shape
+    _, _, h, w = arr.shape
     results = {
         phase: {
             'point': np.full((h, w), np.nan, dtype=np.float32),
@@ -246,7 +254,7 @@ def compute_transition_dates(hls_evi_collection, route_buffer, ma_forest, year, 
     print(f'  Fitting logistic curves with CIs for {year}...')
     for i in range(h):
         for j in range(w):
-            fit = _fit_pixel(doys, arr[:, i, j])
+            fit = _fit_pixel(doys, arr[:, 0, i, j])  # EVI only (band 0) for greendown fitting
             if fit is None:
                 continue
             popt, pcov = fit

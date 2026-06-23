@@ -1,0 +1,221 @@
+import datetime
+import glob
+import math
+import os
+import re
+import numpy as np
+import pandas as pd
+import rasterio
+from pyproj import Transformer
+from rasterio.transform import xy
+
+from filter_ci_widths import load_ci_widths, MAX_CI_WIDTH
+
+NODATA = -9999.0
+CROSS_YEAR_MAX_CI_WIDTH = 30.0  # days; threshold for including a year in cross-year averages
+
+
+def _build_cross_year_transition_lookup(output_dir):
+    """
+    Load transition point estimates and CI widths for all years in output_dir.
+    Returns {year: {phase: array(h,w)}} where values are DOY floats, set to NaN
+    if any of the three CI widths for that pixel exceed CROSS_YEAR_MAX_CI_WIDTH.
+    Only years with all 6 required GeoTIFFs present are included.
+    """
+    phases = ('start', 'middle', 'end')
+    pattern = re.compile(r'greendown_start_(\d{4})\.tif')
+    available_years = sorted(
+        int(m.group(1))
+        for p in glob.glob(os.path.join(output_dir, 'greendown_start_*.tif'))
+        if (m := pattern.search(os.path.basename(p)))
+    )
+
+    lookup = {}
+    for year in available_years:
+        required = (
+            [os.path.join(output_dir, f'greendown_{p}_{year}.tif') for p in phases] +
+            [os.path.join(output_dir, f'greendown_{p}_ci_width_{year}.tif') for p in phases]
+        )
+        if not all(os.path.exists(f) for f in required):
+            continue
+
+        # Build quality mask: all three CI widths must be finite and <= threshold
+        ci_mask = None
+        for phase in phases:
+            with rasterio.open(os.path.join(output_dir, f'greendown_{phase}_ci_width_{year}.tif')) as src:
+                w = src.read(1).astype(float)
+                w[w == NODATA] = np.nan
+            phase_ok = np.isfinite(w) & (w <= CROSS_YEAR_MAX_CI_WIDTH)
+            ci_mask = phase_ok if ci_mask is None else (ci_mask & phase_ok)
+
+        year_data = {}
+        for phase in phases:
+            with rasterio.open(os.path.join(output_dir, f'greendown_{phase}_{year}.tif')) as src:
+                d = src.read(1).astype(float)
+                d[d == NODATA] = np.nan
+            d[~ci_mask] = np.nan
+            year_data[phase] = d
+
+        lookup[year] = year_data
+
+    return lookup
+
+
+def _load_point_estimates(output_dir, year):
+    """Load start/middle/end point estimate arrays for one year."""
+    points = {}
+    for phase in ('start', 'middle', 'end'):
+        path = os.path.join(output_dir, f'greendown_{phase}_{year}.tif')
+        with rasterio.open(path) as src:
+            data = src.read(1).astype(float)
+            data[data == NODATA] = np.nan
+            points[phase] = data
+    return points
+
+
+def _load_lat_array(output_dir, year):
+    """
+    Build a 2D array of WGS84 latitudes for every pixel, derived from the
+    spatial transform and CRS of the reference GeoTIFF.
+    """
+    ref_path = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
+    with rasterio.open(ref_path) as src:
+        h, w       = src.height, src.width
+        transform  = src.transform
+        src_crs    = src.crs
+
+    rows_idx, cols_idx = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
+    xs, ys = xy(transform, rows_idx.ravel(), cols_idx.ravel())
+
+    transformer = Transformer.from_crs(src_crs, 'EPSG:4326', always_xy=True)
+    _, lats = transformer.transform(xs, ys)
+
+    return np.array(lats).reshape(h, w)
+
+
+def _day_length(doy, lat_deg):
+    """Day length in hours for a given DOY and latitude (degrees)."""
+    lat  = math.radians(lat_deg)
+    decl = math.radians(-23.45 * math.cos(math.radians(360 / 365 * (doy + 10))))
+    arg  = max(-1.0, min(1.0, -math.tan(lat) * math.tan(decl)))
+    return 2 * math.degrees(math.acos(arg)) / 15
+
+
+def _assign_label(doy, start, middle, end):
+    """Assign phenological label based on DOY relative to transition point estimates."""
+    if doy < start:
+        return 'before'
+    elif doy < middle:
+        return 'early'
+    elif doy < end:
+        return 'late'
+    else:
+        return 'after'
+
+
+def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
+    """
+    For pixel-years where all three CI widths are < max_width days, load the
+    EVI and NDVI time series and label each observation relative to the greendown
+    transition point estimates (start, middle, end).
+
+    Returns a DataFrame with columns: year, EVI, NDVI, day_length_hrs, label.
+    """
+    phases = ('start', 'middle', 'end')
+    widths = load_ci_widths(output_dir, years)
+    cross_year_lookup = _build_cross_year_transition_lookup(output_dir)
+    rows = []
+
+    for year in years:
+        year_widths = widths[year]
+        if any(year_widths[p] is None for p in phases):
+            print(f'  {year}: skipped (missing CI width GeoTIFF)')
+            continue
+
+        # Build mask: pixels with valid CI width < max_width for all phases
+        mask = np.ones(year_widths['start'].shape, dtype=bool)
+        for phase in phases:
+            arr = year_widths[phase]
+            mask &= np.isfinite(arr) & (arr < max_width)
+
+        if not mask.any():
+            print(f'  {year}: no qualifying pixels')
+            continue
+
+        # Load EVI/NDVI stack (n_images, n_bands, h, w): band 0=EVI, band 1=NDVI
+        indices_stack = np.load(os.path.join(output_dir, f'hls_indices_stack_{year}.npy'))
+        doys          = np.load(os.path.join(output_dir, f'hls_indices_doys_{year}.npy'))
+        points        = _load_point_estimates(output_dir, year)
+        lat_array     = _load_lat_array(output_dir, year)
+
+        pixel_rows, pixel_cols = np.where(mask)
+        print(f'  {year}: {len(pixel_rows)} qualifying pixels')
+
+        sorted_t = np.argsort(doys)  # chronological order
+
+        for r, c in zip(pixel_rows, pixel_cols):
+            start  = points['start'][r, c]
+            middle = points['middle'][r, c]
+            end    = points['end'][r, c]
+            lat    = lat_array[r, c]
+
+            if not (np.isfinite(start) and np.isfinite(middle) and np.isfinite(end)):
+                continue
+
+            # Cross-year average transition DOYs (other years with CI width <= 30 days)
+            avg_doys = {}
+            for phase in phases:
+                vals = [
+                    float(cross_year_lookup[yr][phase][r, c])
+                    for yr in cross_year_lookup
+                    if yr != year and np.isfinite(cross_year_lookup[yr][phase][r, c])
+                ]
+                avg_doys[phase] = float(np.mean(vals)) if vals else float('nan')
+
+            prev_evi   = None
+            prev2_evi  = None
+            prev_ndvi  = None
+            prev2_ndvi = None
+            for t in sorted_t:
+                doy  = doys[t]
+                evi  = indices_stack[t, 0, r, c]
+                ndvi = indices_stack[t, 1, r, c]
+                if not np.isfinite(evi) or evi <= 0:
+                    continue
+                if not np.isfinite(ndvi):
+                    continue
+                evi_delta   = (float(evi)  - prev_evi)   if prev_evi   is not None else float('nan')
+                evi_delta2  = (float(evi)  - prev2_evi)  if prev2_evi  is not None else float('nan')
+                ndvi_delta  = (float(ndvi) - prev_ndvi)  if prev_ndvi  is not None else float('nan')
+                ndvi_delta2 = (float(ndvi) - prev2_ndvi) if prev2_ndvi is not None else float('nan')
+                prev2_evi   = prev_evi
+                prev_evi    = float(evi)
+                prev2_ndvi  = prev_ndvi
+                prev_ndvi   = float(ndvi)
+                date = (datetime.date(year, 1, 1) + datetime.timedelta(days=int(doy) - 1)).isoformat()
+                rows.append({
+                    'year':                      year,
+                    'date':                      date,
+                    'doy':                       int(doy),
+                    'EVI':                       float(evi),
+                    'NDVI':                      float(ndvi),
+                    'evi_delta':                 evi_delta,
+                    'evi_delta2':                evi_delta2,
+                    'ndvi_delta':                ndvi_delta,
+                    'ndvi_delta2':               ndvi_delta2,
+                    'day_length_hrs':            _day_length(int(doy), lat),
+                    'doy_minus_avg_start':  int(doy) - avg_doys['start'],
+                    'doy_minus_avg_middle': int(doy) - avg_doys['middle'],
+                    'doy_minus_avg_end':    int(doy) - avg_doys['end'],
+                    'label':                     _assign_label(doy, start, middle, end),
+                })
+
+    df = pd.DataFrame(rows, columns=[
+        'year', 'date', 'doy', 'EVI', 'NDVI',
+        'evi_delta', 'evi_delta2', 'ndvi_delta', 'ndvi_delta2',
+        'day_length_hrs',
+        'doy_minus_avg_start', 'doy_minus_avg_middle', 'doy_minus_avg_end',
+        'label',
+    ])
+    print(f'\nTotal labeled phenology observations: {len(df)}')
+    return df
