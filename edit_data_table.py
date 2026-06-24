@@ -72,6 +72,13 @@ def _gap_fill_doy_minus_avg_middle(feature_df, output_dir):
     return feature_df
 
 
+def _balance_classes(feature_df):
+    min_count = feature_df['label'].value_counts().min()
+    return (feature_df
+            .groupby('label', group_keys=False)
+            .apply(lambda g: g.sample(min_count, random_state=42)))
+
+
 def edit_feature_table(feature_df, output_dir):
     #Imputation to fill in missing data (pixels that never have reliable transition date estimates)
     feature_df = _gap_fill_doy_minus_avg_middle(feature_df, output_dir)
@@ -83,7 +90,11 @@ def edit_feature_table(feature_df, output_dir):
     #Remove columns not needed for models
     feature_df = feature_df.drop(columns=['doy', 'doy_minus_avg_start', 'doy_minus_avg_end', 'year', 'date'])
 
-    #TODO: Think about outliers
+    #TODO: Think about outliers (skipping for now because going to build a decision tree first and those are less sensitive to outliers)
+
+    #Undersample majority classes to match the size of the smallest class
+    labels = feature_df['label']
+    feature_df = _balance_classes(feature_df)
 
     #Z-score normalize each column separately
     numeric_cols = feature_df.select_dtypes(include='number').columns
@@ -91,6 +102,6 @@ def edit_feature_table(feature_df, output_dir):
         (feature_df[numeric_cols] - feature_df[numeric_cols].mean())
         / feature_df[numeric_cols].std()
     )
+    feature_df['label'] = labels.loc[feature_df.index]
 
-    #TODO: Think about class distribution
     return feature_df
