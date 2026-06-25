@@ -53,6 +53,8 @@ def predict_phenology(date_str, output_dir):
 
     # Spatial metadata for mapping
     ref_path = os.path.join(output_dir, f'hls_indices_ref_{PRED_YEAR}.tif')
+    if not os.path.exists(ref_path):
+        ref_path = os.path.join(output_dir, 'hls_indices_ref_current.tif')
     with rasterio.open(ref_path) as src:
         transform = src.transform
         crs       = src.crs

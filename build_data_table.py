@@ -96,6 +96,8 @@ def _load_lat_array(output_dir, year):
         Array of shape (h, w) with WGS84 latitude values.
     """
     ref_path = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
+    if not os.path.exists(ref_path):
+        ref_path = os.path.join(output_dir, 'hls_indices_ref_current.tif')
     with rasterio.open(ref_path) as src:
         h, w       = src.height, src.width
         transform  = src.transform
