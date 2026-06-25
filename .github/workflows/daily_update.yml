@@ -2,7 +2,7 @@ name: Daily Phenology Update
 
 on:
   schedule:
-    - cron: '0 12 * * *'   # noon UTC daily
+    - cron: '0 9 * * *'   # 9am UTC = 5am ET (EDT, UTC-4)
   workflow_dispatch:        # allow manual trigger for testing
 
 jobs:
