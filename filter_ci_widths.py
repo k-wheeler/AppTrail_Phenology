@@ -2,15 +2,19 @@ import os
 import numpy as np
 import rasterio
 
-NODATA = -9999.0
-MAX_CI_WIDTH = 15  # days
+from constants import NODATA, MAX_CI_WIDTH
 
 
 def load_ci_widths(output_dir, years):
-    """
-    Load CI width GeoTIFFs for all years and phases.
-    Returns dict: {year: {'start': array, 'middle': array, 'end': array}}
-    Arrays are float with NaN for nodata/missing.
+    """Load CI width GeoTIFFs for all years and phases.
+
+    Args:
+        output_dir: Path to directory containing CI width GeoTIFFs.
+        years: Iterable of integer years to load.
+
+    Returns:
+        Dict of {year: {'start': array, 'middle': array, 'end': array}}.
+        Arrays are float with NaN for nodata or missing files.
     """
     phases = ('start', 'middle', 'end')
     widths = {}
@@ -30,11 +34,17 @@ def load_ci_widths(output_dir, years):
 
 
 def count_narrow_ci_pixel_years(output_dir, years, max_width=MAX_CI_WIDTH):
-    """
-    Count pixel-year combinations where all three transition CI widths
-    are less than max_width days (and non-NaN).
+    """Count pixel-year combinations where all three CI widths are < max_width days.
 
-    Prints a summary and returns the count.
+    Prints a per-year and aggregate summary.
+
+    Args:
+        output_dir: Path to directory containing CI width GeoTIFFs.
+        years: Iterable of integer years to evaluate.
+        max_width: CI width threshold in days. Defaults to MAX_CI_WIDTH.
+
+    Returns:
+        Integer count of qualifying pixel-year combinations.
     """
     widths = load_ci_widths(output_dir, years)
     phases = ('start', 'middle', 'end')

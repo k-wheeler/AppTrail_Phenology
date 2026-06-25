@@ -2,6 +2,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 
+from constants import LABEL_COLORS
+
 
 # Columns to skip (non-numeric or categorical)
 SKIP_COLS = {'date', 'label'}
@@ -27,16 +29,17 @@ COL_LABELS = {
 
 
 def plot_feature_distributions(feature_df):
-    """
-    Plot a histogram for each numeric column in feature_df, with one subplot
-    per label category (before / early / late / after) and a dashed line at
-    the mean. Skips the 'date' column.
+    """Plot histograms and a correlation heatmap for all numeric features.
 
-    Also plots a pairwise Pearson correlation heatmap across all columns
-    except year and date.
+    For each numeric column, plots one histogram subplot per label category
+    (before / early / late / after) with a dashed vertical line at the mean.
+    Also plots a pairwise Pearson correlation heatmap across all columns except
+    year and date.
+
+    Args:
+        feature_df: DataFrame with a 'label' column and numeric feature columns.
     """
-    labels       = ['before', 'early', 'late', 'after']
-    label_colors = {'before': 'steelblue', 'early': 'green', 'late': 'orange', 'after': 'red'}
+    labels = ['before', 'early', 'late', 'after']
 
     numeric_cols = [c for c in feature_df.columns if c not in SKIP_COLS]
 
@@ -51,12 +54,12 @@ def plot_feature_distributions(feature_df):
                 year_vals   = sorted(subset.unique().astype(int))
                 year_counts = [int((subset == y).sum()) for y in year_vals]
                 ax.bar([str(y) for y in year_vals], year_counts,
-                       color=label_colors[label], edgecolor='white', linewidth=0.4)
+                       color=LABEL_COLORS[label], edgecolor='white', linewidth=0.4)
                 ax.set_title(f'{label.capitalize()} (n={len(subset):,})')
                 ax.tick_params(axis='x', rotation=45)
             else:
                 mean = subset.mean()
-                ax.hist(subset, bins=40, color=label_colors[label],
+                ax.hist(subset, bins=40, color=LABEL_COLORS[label],
                         edgecolor='white', linewidth=0.4)
                 ax.axvline(mean, color='black', linewidth=1.2, linestyle='--')
                 ax.set_title(f'{label.capitalize()} (n={len(subset):,})\nmean = {mean:.3f}')

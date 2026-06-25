@@ -1,17 +1,23 @@
 import glob
+import json
+import os
 import re
 import numpy as np
 import rasterio
 
-NODATA = -9999.0
-GAP_FILL_MAX_CI_WIDTH = 14.0  # days; threshold for pixels included in global average
+from constants import NODATA, GAP_FILL_MAX_CI_WIDTH
 
 
 def _compute_global_avg_middle(output_dir):
-    """
-    Compute the mean middle transition DOY across all year-pixel combinations
-    where all three CI widths are <= GAP_FILL_MAX_CI_WIDTH days.
-    Returns a scalar float (or NaN if no qualifying pixels found).
+    """Compute the mean middle transition DOY across qualifying pixel-years.
+
+    A pixel-year qualifies if all three CI widths are <= GAP_FILL_MAX_CI_WIDTH days.
+
+    Args:
+        output_dir: Path to directory containing transition and CI width GeoTIFFs.
+
+    Returns:
+        Mean middle transition DOY as a float, or NaN if no qualifying pixels found.
     """
     phases = ('start', 'middle', 'end')
     pattern = re.compile(r'greendown_start_(\d{4})\.tif')
@@ -49,10 +55,17 @@ def _compute_global_avg_middle(output_dir):
 
 
 def _gap_fill_doy_minus_avg_middle(feature_df, output_dir):
-    """
-    Fill NaN values in doy_minus_avg_middle with (row's doy) minus the global
-    average middle transition DOY across all year-pixel combinations with all
-    three CI widths <= 14 days.
+    """Gap-fill NaN values in the doy_minus_avg_middle column.
+
+    Fills using (row's doy) minus the global average middle transition DOY,
+    computed from pixel-years where all three CI widths are <= GAP_FILL_MAX_CI_WIDTH.
+
+    Args:
+        feature_df: DataFrame containing doy and doy_minus_avg_middle columns.
+        output_dir: Path to directory containing transition and CI width GeoTIFFs.
+
+    Returns:
+        DataFrame with NaN values in doy_minus_avg_middle filled where possible.
     """
     nan_mask = feature_df['doy_minus_avg_middle'].isna()
     if not nan_mask.any():
@@ -73,6 +86,14 @@ def _gap_fill_doy_minus_avg_middle(feature_df, output_dir):
 
 
 def _balance_classes(feature_df):
+    """Undersample majority label classes to match the size of the smallest class.
+
+    Args:
+        feature_df: DataFrame with a 'label' column.
+
+    Returns:
+        Balanced DataFrame with equal representation of each label.
+    """
     min_count = feature_df['label'].value_counts().min()
     return (feature_df
             .groupby('label', group_keys=False)
@@ -80,6 +101,19 @@ def _balance_classes(feature_df):
 
 
 def edit_feature_table(feature_df, output_dir):
+    """Prepare the feature table for model training.
+
+    Gap-fills doy_minus_avg_middle, drops rows with NaN deltas, removes unused
+    columns, balances classes by undersampling, and z-score normalizes numeric
+    columns. Saves normalization statistics to {output_dir}/norm_stats.json.
+
+    Args:
+        feature_df: DataFrame produced by build_feature_table.
+        output_dir: Path to directory for reading GeoTIFFs and writing norm_stats.json.
+
+    Returns:
+        Cleaned, balanced, and normalized DataFrame ready for model training.
+    """
     #Imputation to fill in missing data (pixels that never have reliable transition date estimates)
     feature_df = _gap_fill_doy_minus_avg_middle(feature_df, output_dir)
 
@@ -98,10 +132,15 @@ def edit_feature_table(feature_df, output_dir):
 
     #Z-score normalize each column separately
     numeric_cols = feature_df.select_dtypes(include='number').columns
-    feature_df[numeric_cols] = (
-        (feature_df[numeric_cols] - feature_df[numeric_cols].mean())
-        / feature_df[numeric_cols].std()
-    )
+    col_means = feature_df[numeric_cols].mean()
+    col_stds  = feature_df[numeric_cols].std()
+    feature_df[numeric_cols] = (feature_df[numeric_cols] - col_means) / col_stds
     feature_df['label'] = labels.loc[feature_df.index]
+
+    # Save normalization statistics so prediction code can apply the same scaling
+    norm_stats = {col: {'mean': float(col_means[col]), 'std': float(col_stds[col])}
+                  for col in numeric_cols}
+    with open(os.path.join(output_dir, 'norm_stats.json'), 'w') as f:
+        json.dump(norm_stats, f, indent=2)
 
     return feature_df

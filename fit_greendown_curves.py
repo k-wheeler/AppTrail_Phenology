@@ -6,6 +6,8 @@ import geemap
 import rasterio
 from scipy.optimize import curve_fit
 
+from constants import NODATA
+
 N_CI_SAMPLES = 200  # Monte Carlo samples for confidence intervals
 
 
@@ -19,19 +21,32 @@ def _decreasing_logistic(t, L, k, t_mid, offset):
 
 
 def _curvature_extrema_doys(k, t_mid):
-    """
-    Analytical solution for the three DOYs where d(curvature)/dt = 0
-    on a logistic curve, corresponding to the start, middle, and end
-    of the greendown transition.
+    """Compute the three DOYs where d(curvature)/dt = 0 on a logistic curve.
+
+    These correspond analytically to the start, middle, and end of the
+    greendown transition.
+
+    Args:
+        k: Steepness parameter of the logistic curve.
+        t_mid: Inflection point (middle transition DOY).
+
+    Returns:
+        Tuple of (start_doy, middle_doy, end_doy).
     """
     delta = np.log(2 + np.sqrt(3)) / k
     return t_mid - delta, t_mid, t_mid + delta
 
 
 def _fit_pixel(doys, values):
-    """
-    Fit a decreasing logistic to one pixel's time series.
-    Returns (popt, pcov) or None if fit fails.
+    """Fit a decreasing logistic to one pixel's EVI time series.
+
+    Args:
+        doys: Array of day-of-year values.
+        values: Corresponding EVI values (NaN or <= 0 are excluded).
+
+    Returns:
+        Tuple of (popt, pcov) on success, or None if fit fails. pcov may be
+        None if the covariance matrix is non-finite.
     """
     valid = np.isfinite(values) & (values > 0)
     if valid.sum() < 4:
@@ -54,9 +69,15 @@ def _fit_pixel(doys, values):
 
 
 def _make_psd(pcov):
-    """
-    Force a covariance matrix to be positive semi-definite by clipping
-    negative eigenvalues to zero, then reconstructing.
+    """Force a covariance matrix to be positive semi-definite.
+
+    Clips negative eigenvalues to zero and reconstructs via eigen-decomposition.
+
+    Args:
+        pcov: Square covariance matrix from curve_fit.
+
+    Returns:
+        Positive semi-definite version of pcov.
     """
     eigvals, eigvecs = np.linalg.eigh(pcov)
     eigvals = np.clip(eigvals, 0, None)
@@ -64,9 +85,16 @@ def _make_psd(pcov):
 
 
 def _sample_params(popt, pcov, n=N_CI_SAMPLES):
-    """
-    Draw n parameter sets from the multivariate normal defined by
-    the curve_fit result. Returns array (n, 4) or None.
+    """Draw parameter sets from the multivariate normal defined by a curve_fit result.
+
+    Args:
+        popt: Best-fit parameter vector of length 4.
+        pcov: Covariance matrix from curve_fit.
+        n: Number of Monte Carlo samples to draw.
+
+    Returns:
+        Array of shape (m, 4) with valid samples (k > 0), or None if fewer than
+        10 valid samples were obtained.
     """
     try:
         pcov_psd = _make_psd(pcov)
@@ -79,9 +107,15 @@ def _sample_params(popt, pcov, n=N_CI_SAMPLES):
 
 
 def compute_curve_ci(popt, pcov, t):
-    """
-    95% CI band for the fitted logistic at times t.
-    Returns (fitted, lower, upper).
+    """Compute a 95% CI band for the fitted logistic at times t.
+
+    Args:
+        popt: Best-fit parameter vector.
+        pcov: Covariance matrix from curve_fit, or None for no uncertainty.
+        t: Array of DOY values at which to evaluate the curve.
+
+    Returns:
+        Tuple of (fitted, lower, upper) arrays at the given times.
     """
     fitted = _decreasing_logistic(t, *popt)
     if pcov is None:
@@ -98,10 +132,15 @@ def compute_curve_ci(popt, pcov, t):
 
 
 def compute_transition_dates_ci(popt, pcov):
-    """
-    Point estimates and 95% CI for the three transition DOYs.
-    Returns dict with keys 'start', 'middle', 'end', each a tuple
-    (point, lower, upper).
+    """Compute point estimates and 95% CI for the three greendown transition DOYs.
+
+    Args:
+        popt: Best-fit parameter vector from curve_fit.
+        pcov: Covariance matrix from curve_fit, or None for no uncertainty.
+
+    Returns:
+        Dict with keys 'start', 'middle', 'end', each mapping to a tuple of
+        (point_estimate, ci_lower, ci_upper).
     """
     s, m, e = _curvature_extrema_doys(popt[1], popt[2])
 
@@ -138,9 +177,22 @@ def compute_transition_dates_ci(popt, pcov):
 # ----------------------------
 
 def _export_stack(collection, ma_forest, route_buffer, year, output_dir):
-    """
-    Export EVI and NDVI images one at a time (each ~20MB, under the 50MB limit)
-    and stack into a numpy array. Caches results to disk.
+    """Export EVI and NDVI images from GEE and stack into a numpy array.
+
+    Exports one image at a time (~20 MB each, under the 50 MB limit) and
+    caches the result to disk to avoid re-downloading.
+
+    Args:
+        collection: GEE ImageCollection with EVI and NDVI bands.
+        ma_forest: GEE Image binary forest mask.
+        route_buffer: GEE Geometry defining the export region.
+        year: Integer year being exported.
+        output_dir: Directory to write cached stack files.
+
+    Returns:
+        Tuple of (stack, doys, ref_path) where stack is array of shape
+        (n_images, 2, h, w), doys is a 1D DOY array, and ref_path is the
+        path to the single-band reference GeoTIFF.
     """
     stack_path = os.path.join(output_dir, f'hls_indices_stack_{year}.npy')
     doys_path  = os.path.join(output_dir, f'hls_indices_doys_{year}.npy')
@@ -212,19 +264,26 @@ def _export_stack(collection, ma_forest, route_buffer, year, output_dir):
 # ----------------------------
 
 def compute_transition_dates(hls_indices_collection, route_buffer, ma_forest, year, output_dir='.'):
-    """
-    Export Jul-Dec EVI and NDVI per image from GEE, fit a decreasing logistic per forest
-    pixel using EVI only, and save GeoTIFFs for the point estimate and 95% CI of each of the
-    three greendown transition dates (start, middle, end).
+    """Fit greendown curves and save transition date GeoTIFFs for one year.
 
-    Output files per year (12 total):
-      greendown_{phase}_{year}.tif            — point estimate
-      greendown_{phase}_ci_lower_{year}.tif   — 2.5th percentile
-      greendown_{phase}_ci_upper_{year}.tif   — 97.5th percentile
-      greendown_{phase}_ci_width_{year}.tif   — upper minus lower
+    Exports Jul–Dec EVI and NDVI per image from GEE, fits a decreasing logistic
+    per forest pixel using EVI only, and saves 12 GeoTIFFs:
+        greendown_{phase}_{year}.tif            — point estimate
+        greendown_{phase}_ci_lower_{year}.tif   — 2.5th percentile
+        greendown_{phase}_ci_upper_{year}.tif   — 97.5th percentile
+        greendown_{phase}_ci_width_{year}.tif   — upper minus lower
 
-    Results are cached — re-running skips already-completed years.
-    Returns a dict: {'start': path, 'middle': path, 'end': path}  (point estimates)
+    Results are cached; re-running skips already-completed years.
+
+    Args:
+        hls_indices_collection: GEE ImageCollection with EVI and NDVI bands.
+        route_buffer: GEE Geometry defining the spatial extent.
+        ma_forest: GEE Image binary forest mask.
+        year: Integer year to process.
+        output_dir: Directory for cached stacks and output GeoTIFFs.
+
+    Returns:
+        Dict of {'start': path, 'middle': path, 'end': path} for point estimates.
     """
     phases = ('start', 'middle', 'end')
     point_paths = {p: os.path.join(output_dir, f'greendown_{p}_{year}.tif')          for p in phases}
@@ -285,14 +344,14 @@ def compute_transition_dates(hls_indices_collection, route_buffer, ma_forest, ye
 
     with rasterio.open(ref_path) as src:
         out_profile = src.profile.copy()
-    out_profile.update(count=1, dtype='float32', nodata=-9999.0)
+    out_profile.update(count=1, dtype='float32', nodata=NODATA)
 
     for phase in phases:
         for key, path in [('point', point_paths[phase]),
                           ('lower', lower_paths[phase]),
                           ('upper', upper_paths[phase])]:
             data = results[phase][key].copy()
-            data[np.isnan(data)] = -9999.0
+            data[np.isnan(data)] = NODATA
             with rasterio.open(path, 'w', **out_profile) as dst:
                 dst.write(data, 1)
 
@@ -301,7 +360,7 @@ def compute_transition_dates(hls_indices_collection, route_buffer, ma_forest, ye
         upper = results[phase]['upper']
         width = np.where(np.isfinite(lower) & np.isfinite(upper), upper - lower, np.nan)
         width_data = width.astype(np.float32)
-        width_data[np.isnan(width_data)] = -9999.0
+        width_data[np.isnan(width_data)] = NODATA
         with rasterio.open(width_paths[phase], 'w', **out_profile) as dst:
             dst.write(width_data, 1)
 
@@ -314,11 +373,15 @@ def compute_transition_dates(hls_indices_collection, route_buffer, ma_forest, ye
 # ----------------------------
 
 def compute_average_transition_dates(paths_by_year, output_dir='.'):
-    """
-    Pixel-wise mean of start/middle/end point-estimate GeoTIFFs across years.
+    """Compute pixel-wise mean transition DOYs across years.
 
-    paths_by_year: list of dicts returned by compute_transition_dates.
-    Returns dict: {'start': path, 'middle': path, 'end': path}
+    Args:
+        paths_by_year: List of dicts returned by compute_transition_dates,
+            one per year.
+        output_dir: Directory to write the averaged GeoTIFFs.
+
+    Returns:
+        Dict of {'start': path, 'middle': path, 'end': path} for averaged rasters.
     """
     avg_paths = {}
     for phase in ('start', 'middle', 'end'):
@@ -335,7 +398,7 @@ def compute_average_transition_dates(paths_by_year, output_dir='.'):
                     profile = src.profile
 
         mean = np.nanmean(np.stack(arrays, axis=0), axis=0).astype(np.float32)
-        mean[np.isnan(mean)] = -9999.0
+        mean[np.isnan(mean)] = NODATA
 
         path = os.path.join(output_dir, f'greendown_{phase}_avg.tif')
         with rasterio.open(path, 'w', **profile) as dst:

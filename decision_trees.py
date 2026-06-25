@@ -4,6 +4,14 @@ import pandas as pd
 import numpy as np
 
 def split_data(feature_df):
+    """Split the feature table into 75/25 train/test sets.
+
+    Args:
+        feature_df: DataFrame with a 'label' column and numeric predictors.
+
+    Returns:
+        Tuple of (x_train, x_test, y_train, y_test).
+    """
     response_name = "label"
     response = feature_df[response_name]
     predictor_cols = [c for c in feature_df.columns if c != response_name]
@@ -13,7 +21,21 @@ def split_data(feature_df):
     
     return x_train, x_test, y_train, y_test
 
+
 def fit_tree(x_train, y_train, prune=False):
+    """Fit a DecisionTreeClassifier, optionally with hyperparameter tuning.
+
+    When prune=True, tunes max_depth, min_samples_split, min_samples_leaf, and
+    ccp_alpha via GridSearchCV using data-driven grids scaled to training set size.
+
+    Args:
+        x_train: Feature matrix for training.
+        y_train: Label vector for training.
+        prune: If True, run GridSearchCV to select hyperparameters.
+
+    Returns:
+        Fitted DecisionTreeClassifier.
+    """
     clf = DecisionTreeClassifier(random_state=1234)
 
     #Without pruning

@@ -9,18 +9,20 @@ import rasterio
 from pyproj import Transformer
 from rasterio.transform import xy
 
-from filter_ci_widths import load_ci_widths, MAX_CI_WIDTH
-
-NODATA = -9999.0
-CROSS_YEAR_MAX_CI_WIDTH = 30.0  # days; threshold for including a year in cross-year averages
+from filter_ci_widths import load_ci_widths
+from constants import NODATA, MAX_CI_WIDTH, CROSS_YEAR_MAX_CI_WIDTH
 
 
 def _build_cross_year_transition_lookup(output_dir):
-    """
-    Load transition point estimates and CI widths for all years in output_dir.
-    Returns {year: {phase: array(h,w)}} where values are DOY floats, set to NaN
-    if any of the three CI widths for that pixel exceed CROSS_YEAR_MAX_CI_WIDTH.
-    Only years with all 6 required GeoTIFFs present are included.
+    """Load transition point estimates for all years, filtered by CI width.
+
+    Args:
+        output_dir: Path to directory containing transition and CI width GeoTIFFs.
+
+    Returns:
+        Dict of {year: {phase: array(h,w)}} with DOY floats. Values are NaN
+        for pixels where any CI width exceeds CROSS_YEAR_MAX_CI_WIDTH, or where
+        required GeoTIFFs are missing.
     """
     phases = ('start', 'middle', 'end')
     pattern = re.compile(r'greendown_start_(\d{4})\.tif')
@@ -62,7 +64,15 @@ def _build_cross_year_transition_lookup(output_dir):
 
 
 def _load_point_estimates(output_dir, year):
-    """Load start/middle/end point estimate arrays for one year."""
+    """Load start/middle/end greendown transition point estimate arrays for one year.
+
+    Args:
+        output_dir: Path to directory containing transition GeoTIFFs.
+        year: Integer year to load.
+
+    Returns:
+        Dict of {'start': array, 'middle': array, 'end': array} with NaN for nodata.
+    """
     points = {}
     for phase in ('start', 'middle', 'end'):
         path = os.path.join(output_dir, f'greendown_{phase}_{year}.tif')
@@ -74,9 +84,16 @@ def _load_point_estimates(output_dir, year):
 
 
 def _load_lat_array(output_dir, year):
-    """
-    Build a 2D array of WGS84 latitudes for every pixel, derived from the
-    spatial transform and CRS of the reference GeoTIFF.
+    """Build a 2D array of WGS84 latitudes for every pixel.
+
+    Derives latitudes from the spatial transform and CRS of the reference GeoTIFF.
+
+    Args:
+        output_dir: Path to directory containing the reference GeoTIFF.
+        year: Integer year whose reference raster is used.
+
+    Returns:
+        Array of shape (h, w) with WGS84 latitude values.
     """
     ref_path = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
     with rasterio.open(ref_path) as src:
@@ -94,7 +111,15 @@ def _load_lat_array(output_dir, year):
 
 
 def _day_length(doy, lat_deg):
-    """Day length in hours for a given DOY and latitude (degrees)."""
+    """Compute day length in hours using an astronomical solar geometry formula.
+
+    Args:
+        doy: Day of year (1–365).
+        lat_deg: Latitude in decimal degrees.
+
+    Returns:
+        Day length in hours.
+    """
     lat  = math.radians(lat_deg)
     decl = math.radians(-23.45 * math.cos(math.radians(360 / 365 * (doy + 10))))
     arg  = max(-1.0, min(1.0, -math.tan(lat) * math.tan(decl)))
@@ -102,7 +127,17 @@ def _day_length(doy, lat_deg):
 
 
 def _assign_label(doy, start, middle, end):
-    """Assign phenological label based on DOY relative to transition point estimates."""
+    """Assign a phenological label based on DOY relative to transition point estimates.
+
+    Args:
+        doy: Day of year for the observation.
+        start: DOY of the start of greendown.
+        middle: DOY of the middle of greendown.
+        end: DOY of the end of greendown.
+
+    Returns:
+        One of 'before', 'early', 'late', or 'after'.
+    """
     if doy < start:
         return 'before'
     elif doy < middle:
@@ -114,12 +149,20 @@ def _assign_label(doy, start, middle, end):
 
 
 def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
-    """
-    For pixel-years where all three CI widths are < max_width days, load the
-    EVI and NDVI time series and label each observation relative to the greendown
-    transition point estimates (start, middle, end).
+    """Build a labeled feature table from EVI/NDVI time series for qualifying pixel-years.
 
-    Returns a DataFrame with columns: year, EVI, NDVI, day_length_hrs, label.
+    Filters to pixel-years where all three CI widths are < max_width days, then labels
+    each observation relative to the greendown transition point estimates.
+
+    Args:
+        output_dir: Path to directory containing stacks, DOY arrays, and GeoTIFFs.
+        years: List of integer years to process.
+        max_width: Maximum CI width in days for a pixel-year to qualify.
+
+    Returns:
+        DataFrame with columns: year, date, doy, EVI, NDVI, evi_delta, evi_delta2,
+        ndvi_delta, ndvi_delta2, day_length_hrs, doy_minus_avg_start,
+        doy_minus_avg_middle, doy_minus_avg_end, label.
     """
     phases = ('start', 'middle', 'end')
     widths = load_ci_widths(output_dir, years)
