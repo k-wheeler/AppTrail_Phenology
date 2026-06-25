@@ -83,14 +83,24 @@ def _render_avg_doy_png(tif_path, out_path, title, vmin=240, vmax=320):
     Image.fromarray(rgba, mode='RGBA').save(out_path)
     print(f'  Saved {out_path}')
 
-    # Save a colourbar legend as a separate PNG
+    # Save a colourbar legend as a separate PNG with calendar date tick labels
     legend_path = out_path.replace('.png', '_legend.png')
-    fig, ax = plt.subplots(figsize=(4, 0.5))
+    fig, ax = plt.subplots(figsize=(5, 0.6))
     fig.subplots_adjust(bottom=0.5)
     sm = ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cb = fig.colorbar(sm, cax=ax, orientation='horizontal')
-    cb.set_label(f'{title} (DOY)')
+    cb.set_label(title)
+
+    # Pick ~5 evenly spaced DOY ticks and label them as calendar dates (non-leap year)
+    tick_doys = np.linspace(vmin, vmax, 5).astype(int)
+    tick_labels = [
+        (datetime.date(2001, 1, 1) + datetime.timedelta(days=int(d) - 1)).strftime('%b %-d')
+        for d in tick_doys
+    ]
+    cb.set_ticks(tick_doys)
+    cb.set_ticklabels(tick_labels)
+
     plt.savefig(legend_path, bbox_inches='tight', dpi=120)
     plt.close()
     print(f'  Saved {legend_path}')
@@ -113,9 +123,6 @@ def _ensure_avg_pngs(output_dir, web_dir):
         out_path = os.path.join(web_dir, f'avg_{phase}.png')
         if not os.path.exists(tif_path):
             print(f'  Skipping avg {phase} PNG — GeoTIFF not found.')
-            continue
-        if os.path.exists(out_path):
-            print(f'  Avg {phase} PNG already exists, skipping.')
             continue
         _render_avg_doy_png(tif_path, out_path, title)
 
