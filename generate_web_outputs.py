@@ -32,7 +32,6 @@ from map_utils import _pred_grid_to_rgba, _get_wgs84_bounds
 from fit_greendown_curves import update_pixel_state
 from identify_locations import identify_route_buffer, identify_forests
 from predict_for_date import predict_from_pixel_state
-from read_and_process_hls import compute_hls_indices
 
 
 # ---------------------------------------------------------------------------
@@ -293,21 +292,23 @@ L.imageOverlay('current_pred.png', {bounds}, {{opacity: 1.0}}).addTo(mapToday);
     print(f'  Saved {out_path}')
 
 
-def _render_placeholder_html(web_dir):
-    """Write a placeholder page for the off-season period.
+def _render_placeholder_html(web_dir,
+                              message='Satellite monitoring runs June 1 – December 31. '
+                                      'Check back in the summer to see live fall foliage predictions.'):
+    """Write a placeholder page when no prediction is available.
 
     Args:
         web_dir: Directory to write index.html.
+        message: Body text to display on the placeholder page.
     """
-    html = '''<!DOCTYPE html>
+    html = f'''<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><title>AT Phenology</title>
-<style>body{font-family:sans-serif;text-align:center;padding:60px;color:#444;}
-h1{color:#2c6b3f;}</style></head>
+<style>body{{font-family:sans-serif;text-align:center;padding:60px;color:#444;}}
+h1{{color:#2c6b3f;}}</style></head>
 <body>
 <h1>Appalachian Trail Fall Phenology — Massachusetts</h1>
-<p>Satellite monitoring runs June 1 – December 31.</p>
-<p>Check back in the summer to see live fall foliage predictions.</p>
+<p>{message}</p>
 </body></html>'''
     out_path = os.path.join(web_dir, 'index.html')
     with open(out_path, 'w') as f:
@@ -337,20 +338,44 @@ def main():
     # Off-season guard
     if doy < season_start or doy > season_end:
         print(f'DOY {doy} is outside monitoring season (Jun 1–Dec 31). Writing placeholder.')
-        _render_placeholder_html(args.web_dir)
+        _render_placeholder_html(args.web_dir,
+                                 message='Satellite monitoring runs June 1 – December 31. '
+                                         'Check back in the summer to see live fall foliage predictions.')
         return
 
     _init_gee()
 
-    # GEE objects
+    # GEE objects — collection starts Jun 1 to cover the full monitoring season
     route_buffer = identify_route_buffer()
     ma_forest    = identify_forests()
-    collection   = compute_hls_indices(route_buffer, ma_forest, year)
+    collection   = (
+        ee.ImageCollection("NASA/HLS/HLSL30/v002")
+        .filterBounds(route_buffer)
+        .filterDate(f'{year}-06-01', f'{year}-12-31')
+        .select(['B5', 'B4', 'B2'])
+        .map(lambda img: img.expression(
+            '2.5 * ((nir - red) / (nir + 6 * red - 7.5 * blue + 1))',
+            {'nir': img.select('B5'), 'red': img.select('B4'), 'blue': img.select('B2')}
+        ).rename('EVI').clamp(0, 1)
+         .addBands(img.expression(
+            '(nir - red) / (nir + red)',
+            {'nir': img.select('B5'), 'red': img.select('B4')}
+        ).rename('NDVI').clamp(0, 1))
+         .copyProperties(img, ['system:time_start']))
+    )
 
     # Update rolling pixel state with any new images
     print(f'\nUpdating pixel state for {year}...')
     state_path = update_pixel_state(collection, ma_forest, route_buffer,
                                     year, args.output_dir)
+
+    # If no satellite data exists yet for this season, write a placeholder
+    if not os.path.exists(state_path):
+        print('No satellite data available yet for this season. Writing placeholder.')
+        _render_placeholder_html(args.web_dir,
+                                 message='No satellite imagery available yet for this season. '
+                                         'Check back in a few days.')
+        return
 
     # Run prediction
     print(f'\nRunning prediction for {today_str}...')
