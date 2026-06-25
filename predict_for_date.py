@@ -192,7 +192,10 @@ def predict_from_pixel_state(state_path, date_str, output_dir):
     with open(os.path.join(output_dir, 'norm_stats.json')) as f:
         norm_stats = json.load(f)
 
+    # Use current-year ref raster if available; fall back to stable copy
     ref_path = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
+    if not os.path.exists(ref_path):
+        ref_path = os.path.join(output_dir, 'hls_indices_ref_current.tif')
     with rasterio.open(ref_path) as src:
         transform = src.transform
         crs       = src.crs

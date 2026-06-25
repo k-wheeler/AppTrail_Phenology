@@ -449,12 +449,16 @@ def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
                     'doy_0':  nan_hw.copy(), 'doy_1':  nan_hw.copy(), 'doy_2':  nan_hw.copy(),
                 }
 
-            # Write reference raster if not already saved
+            # Write reference rasters if not already saved
             if not os.path.exists(ref_path):
                 ref_profile = src.profile.copy()
                 ref_profile.update(count=1)
                 with rasterio.open(ref_path, 'w', **ref_profile) as dst:
                     dst.write(src.read(1), 1)
+            current_ref = os.path.join(output_dir, 'hls_indices_ref_current.tif')
+            if not os.path.exists(current_ref):
+                import shutil
+                shutil.copy2(ref_path, current_ref)
 
         os.remove(tmp_path)
 
