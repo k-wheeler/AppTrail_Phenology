@@ -28,7 +28,7 @@ from matplotlib.colors import Normalize
 from PIL import Image
 
 from constants import OUTPUT_DIR, LABEL_COLORS, LABEL_ORDER
-from dashboard import _pred_grid_to_rgba, _get_wgs84_bounds
+from map_utils import _pred_grid_to_rgba, _get_wgs84_bounds
 from fit_greendown_curves import update_pixel_state
 from identify_locations import identify_route_buffer, identify_forests
 from predict_for_date import predict_from_pixel_state
