@@ -12,7 +12,7 @@ from build_data_table import (
 )
 from edit_data_table import _compute_global_avg_middle
 
-PRED_YEAR = 2025
+PRED_YEAR = datetime.date.today().year
 FEATURE_COLS = ['EVI', 'NDVI', 'evi_delta', 'evi_delta2',
                 'ndvi_delta', 'ndvi_delta2', 'day_length_hrs', 'doy_minus_avg_middle']
 
@@ -153,5 +153,91 @@ def predict_phenology(date_str, output_dir):
     for t in range(n_imgs):
         evi_t = stack[t, 0].astype(float)
         forest_mask |= (np.isfinite(evi_t) & (evi_t > 0))
+
+    return pred_grid, forest_mask, transform, crs
+
+
+def predict_from_pixel_state(state_path, date_str, output_dir):
+    """Predict phenological state using the compact rolling pixel state file.
+
+    Used by the automated daily pipeline (GitHub Action) instead of the full
+    year stack. Produces identical predictions to predict_phenology() for the
+    same date, as long as the pixel state is current.
+
+    Args:
+        state_path: Path to pixel_state_{year}.npz containing per-pixel arrays
+            evi_0/1/2, ndvi_0/1/2, doy_0/1/2 (index 0 = most recent valid obs).
+        date_str: ISO-format date string, e.g. '2026-09-15'.
+        output_dir: Path to greendown_outputs directory containing
+            norm_stats.json, decision_tree_model.joblib, and transition GeoTIFFs.
+
+    Returns:
+        Tuple of (pred_grid, forest_mask, transform, crs) — same as
+        predict_phenology().
+    """
+    date = datetime.date.fromisoformat(date_str)
+    target_doy = date.timetuple().tm_yday
+    year = date.year
+
+    state = np.load(state_path)
+    evi_0  = state['evi_0'].astype(float)
+    evi_1  = state['evi_1'].astype(float)
+    evi_2  = state['evi_2'].astype(float)
+    ndvi_0 = state['ndvi_0'].astype(float)
+    ndvi_1 = state['ndvi_1'].astype(float)
+    ndvi_2 = state['ndvi_2'].astype(float)
+    h, w = evi_0.shape
+
+    mdl = joblib.load(os.path.join(output_dir, 'decision_tree_model.joblib'))
+    with open(os.path.join(output_dir, 'norm_stats.json')) as f:
+        norm_stats = json.load(f)
+
+    ref_path = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
+    with rasterio.open(ref_path) as src:
+        transform = src.transform
+        crs       = src.crs
+
+    lat_array = _load_lat_array(output_dir, year)
+    cross_year_lookup = _build_cross_year_transition_lookup(output_dir)
+    global_avg_middle = _compute_global_avg_middle(output_dir)
+
+    # Forest mask: pixels with at least one valid observation in the state
+    forest_mask = np.isfinite(evi_0) & (evi_0 > 0)
+    rows_idx, cols_idx = np.where(forest_mask)
+    n_px = len(rows_idx)
+
+    if n_px == 0:
+        return np.full((h, w), 'unknown', dtype=object), forest_mask, transform, crs
+
+    r, c = rows_idx, cols_idx
+    X = np.zeros((n_px, len(FEATURE_COLS)))
+    X[:, 0] = evi_0[r, c]
+    X[:, 1] = ndvi_0[r, c]
+    X[:, 2] = evi_0[r, c] - evi_1[r, c]
+    X[:, 3] = evi_0[r, c] - evi_2[r, c]
+    X[:, 4] = ndvi_0[r, c] - ndvi_1[r, c]
+    X[:, 5] = ndvi_0[r, c] - ndvi_2[r, c]
+    X[:, 6] = np.array([_day_length(target_doy, float(lat_array[ri, ci]))
+                        for ri, ci in zip(r, c)])
+
+    doy_minus = np.full(n_px, np.nan)
+    if year in cross_year_lookup:
+        mid_arr = cross_year_lookup[year]['middle']
+        doy_minus = np.where(np.isfinite(mid_arr[r, c]),
+                             target_doy - mid_arr[r, c], np.nan)
+    if not np.isnan(global_avg_middle):
+        doy_minus = np.where(np.isnan(doy_minus),
+                             target_doy - global_avg_middle, doy_minus)
+    X[:, 7] = doy_minus
+
+    for j, col in enumerate(FEATURE_COLS):
+        mean = norm_stats[col]['mean']
+        std  = norm_stats[col]['std']
+        X[:, j] = (X[:, j] - mean) / std
+    X = np.where(np.isnan(X), 0.0, X)
+
+    preds = mdl.predict(X)
+    pred_grid = np.full((h, w), 'unknown', dtype=object)
+    pred_grid[r, c] = preds
 
     return pred_grid, forest_mask, transform, crs

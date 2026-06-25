@@ -372,6 +372,116 @@ def compute_transition_dates(hls_indices_collection, route_buffer, ma_forest, ye
 # Multi-year average
 # ----------------------------
 
+def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
+    """Download new HLS images and update the compact rolling pixel state file.
+
+    The pixel state stores the 3 most recent valid EVI/NDVI observations per
+    pixel, which is all that is needed to compute prediction features without
+    keeping the full year stack. Only images with DOY greater than the maximum
+    already in the state are downloaded, making each daily run fast.
+
+    Args:
+        collection: GEE ImageCollection with EVI and NDVI bands (Jun–Dec).
+        ma_forest: GEE Image binary forest mask.
+        route_buffer: GEE Geometry defining the export region.
+        year: Integer year being processed.
+        output_dir: Directory to read/write pixel_state_{year}.npz and the
+            reference GeoTIFF hls_indices_ref_{year}.tif.
+
+    Returns:
+        Path to the updated pixel_state_{year}.npz file.
+    """
+    state_path = os.path.join(output_dir, f'pixel_state_{year}.npz')
+    ref_path   = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
+
+    # Load existing state or initialise blank arrays once we know (h, w)
+    existing_doys = set()
+    state = None
+    if os.path.exists(state_path):
+        state = dict(np.load(state_path))
+        h, w = state['evi_0'].shape
+        existing_doys = set(int(d) for d in state.get('seen_doys', []))
+        print(f'  Loaded existing pixel state ({len(existing_doys)} DOYs already processed)')
+
+    # Fetch all image timestamps from GEE and filter to ones not yet processed
+    timestamps = collection.sort('system:time_start').aggregate_array('system:time_start').getInfo()
+    all_doys = [
+        datetime.datetime.utcfromtimestamp(ts / 1000).timetuple().tm_yday
+        for ts in timestamps
+    ]
+    new_indices = [i for i, d in enumerate(all_doys) if d not in existing_doys]
+
+    if not new_indices:
+        print(f'  No new images for {year}; pixel state is current.')
+        return state_path
+
+    print(f'  Downloading {len(new_indices)} new image(s) for {year}...')
+    image_list = collection.sort('system:time_start').toList(len(timestamps))
+
+    for idx in new_indices:
+        doy = all_doys[idx]
+        img = ee.Image(image_list.get(idx)).select(['EVI', 'NDVI']).updateMask(ma_forest)
+        tmp_path = os.path.join(output_dir, f'_tmp_state_{year}_{idx:03d}.tif')
+
+        for attempt in range(3):
+            geemap.ee_export_image(img, filename=tmp_path, scale=30,
+                                   region=route_buffer, file_per_band=False)
+            if os.path.exists(tmp_path):
+                break
+            print(f'    Attempt {attempt + 1}/3 failed, retrying...')
+        else:
+            print(f'    Skipping DOY {doy} after 3 failed attempts.')
+            continue
+
+        with rasterio.open(tmp_path) as src:
+            data = src.read().astype(float)
+            nodata = src.nodata
+            if nodata is not None:
+                data[data == nodata] = np.nan
+
+            # Initialise state arrays on first downloaded image
+            if state is None:
+                h, w = src.height, src.width
+                nan_hw = np.full((h, w), np.nan, dtype=np.float32)
+                state = {
+                    'evi_0':  nan_hw.copy(), 'evi_1':  nan_hw.copy(), 'evi_2':  nan_hw.copy(),
+                    'ndvi_0': nan_hw.copy(), 'ndvi_1': nan_hw.copy(), 'ndvi_2': nan_hw.copy(),
+                    'doy_0':  nan_hw.copy(), 'doy_1':  nan_hw.copy(), 'doy_2':  nan_hw.copy(),
+                }
+
+            # Write reference raster if not already saved
+            if not os.path.exists(ref_path):
+                ref_profile = src.profile.copy()
+                ref_profile.update(count=1)
+                with rasterio.open(ref_path, 'w', **ref_profile) as dst:
+                    dst.write(src.read(1), 1)
+
+        os.remove(tmp_path)
+
+        evi_new  = data[0]
+        ndvi_new = data[1]
+        valid = np.isfinite(evi_new) & (evi_new > 0) & np.isfinite(ndvi_new)
+
+        # Shift rolling window and insert new observation at index 0
+        state['evi_2'][valid]  = state['evi_1'][valid]
+        state['evi_1'][valid]  = state['evi_0'][valid]
+        state['evi_0'][valid]  = evi_new[valid].astype(np.float32)
+        state['ndvi_2'][valid] = state['ndvi_1'][valid]
+        state['ndvi_1'][valid] = state['ndvi_0'][valid]
+        state['ndvi_0'][valid] = ndvi_new[valid].astype(np.float32)
+        state['doy_2'][valid]  = state['doy_1'][valid]
+        state['doy_1'][valid]  = state['doy_0'][valid]
+        state['doy_0'][valid]  = np.float32(doy)
+
+        existing_doys.add(doy)
+        print(f'    Processed DOY {doy} ({len(valid[valid])} valid pixels)')
+
+    state['seen_doys'] = np.array(sorted(existing_doys), dtype=np.int32)
+    np.savez_compressed(state_path, **state)
+    print(f'  Saved pixel state → {state_path}')
+    return state_path
+
+
 def compute_average_transition_dates(paths_by_year, output_dir='.'):
     """Compute pixel-wise mean transition DOYs across years.
 

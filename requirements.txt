@@ -1,0 +1,12 @@
+earthengine-api
+geemap
+numpy
+rasterio
+scipy
+scikit-learn
+joblib
+pandas
+matplotlib
+Pillow
+pyproj
+affine
