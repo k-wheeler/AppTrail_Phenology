@@ -293,6 +293,49 @@ L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}
     {{attribution: '&copy; OpenStreetMap contributors &copy; CARTO'}}).addTo(mapToday);
 L.imageOverlay('current_pred.png', {bounds}, {{opacity: 1.0}}).addTo(mapToday);
 
+// Pixel-click popup: load feature data once, then respond to map clicks
+var pixelData = null;
+var FEAT_LABELS = {{
+  'EVI':                  'EVI',
+  'NDVI':                 'NDVI',
+  'evi_delta':            'EVI Δ1 (vs prior obs)',
+  'evi_delta2':           'EVI Δ2 (vs 2nd prior obs)',
+  'ndvi_delta':           'NDVI Δ1 (vs prior obs)',
+  'ndvi_delta2':          'NDVI Δ2 (vs 2nd prior obs)',
+  'day_length_hrs':       'Day length (hrs)',
+  'doy_minus_avg_middle': 'Days from avg mid-transition'
+}};
+var LABEL_COLORS = {json.dumps(LABEL_COLORS)};
+
+fetch('pixel_features.json')
+  .then(function(r) {{ return r.json(); }})
+  .then(function(d) {{ pixelData = d; }})
+  .catch(function(e) {{ console.warn('pixel_features.json not loaded:', e); }});
+
+mapToday.on('click', function(e) {{
+  if (!pixelData) return;
+  var lat = e.latlng.lat, lon = e.latlng.lng;
+  var south = pixelData.bounds[0][0], west = pixelData.bounds[0][1];
+  var north = pixelData.bounds[1][0], east = pixelData.bounds[1][1];
+  var row = Math.floor((north - lat) / (north - south) * pixelData.nrows);
+  var col = Math.floor((lon  - west) / (east  - west) * pixelData.ncols);
+  var key = row + ',' + col;
+  var p = pixelData.pixels[key];
+  if (!p) return;
+  var labelColor = LABEL_COLORS[p.label] || '#888';
+  var rows = Object.keys(FEAT_LABELS).map(function(k) {{
+    var val = p[k] === null || p[k] === undefined ? '&mdash;' : p[k].toFixed(4);
+    return '<tr><td style="padding:2px 10px 2px 0;color:#555">' + FEAT_LABELS[k] + '</td>' +
+           '<td style="text-align:right;font-variant-numeric:tabular-nums">' + val + '</td></tr>';
+  }}).join('');
+  var html = '<div style="font-size:13px;min-width:230px">' +
+    '<b>Predicted: <span style="color:' + labelColor + '">' +
+    p.label.charAt(0).toUpperCase() + p.label.slice(1) + '</span></b>' +
+    '<table style="margin-top:6px;width:100%;border-collapse:collapse">' +
+    rows + '</table></div>';
+  L.popup().setLatLng(e.latlng).setContent(html).openOn(mapToday);
+}});
+
 // Average transition maps
 {avg_js}
 </script>
@@ -391,10 +434,10 @@ def main():
                                          'Check back in a few days.')
         return
 
-    # Run prediction
+    # Run prediction (request raw feature grids for pixel-click popups)
     print(f'\nRunning prediction for {today_str}...')
-    pred_grid, forest_mask, transform, crs = predict_from_pixel_state(
-        state_path, today_str, args.output_dir
+    pred_grid, forest_mask, transform, crs, feature_grids = predict_from_pixel_state(
+        state_path, today_str, args.output_dir, return_features=True
     )
 
     # Save prediction PNG
@@ -418,6 +461,26 @@ def main():
     with open(meta_path, 'w') as f:
         json.dump(meta, f, indent=2)
     print(f'  Saved {meta_path}')
+
+    # Write pixel feature JSON for click popups
+    print('\nWriting pixel_features.json...')
+    pixels = {}
+    for ri, ci in zip(*np.where(forest_mask)):
+        entry = {'label': str(pred_grid[ri, ci])}
+        for col, grid in feature_grids.items():
+            v = float(grid[ri, ci])
+            entry[col] = None if np.isnan(v) else round(v, 4)
+        pixels[f'{ri},{ci}'] = entry
+    pixel_json = {
+        'nrows': int(pred_grid.shape[0]),
+        'ncols': int(pred_grid.shape[1]),
+        'bounds': bounds,
+        'pixels': pixels,
+    }
+    feat_path = os.path.join(args.web_dir, 'pixel_features.json')
+    with open(feat_path, 'w') as f:
+        json.dump(pixel_json, f, separators=(',', ':'))
+    print(f'  Saved {feat_path} ({os.path.getsize(feat_path) / 1024:.0f} KB)')
 
     # Generate average transition DOY maps (one-time, skipped if already present)
     print('\nChecking average transition DOY maps...')

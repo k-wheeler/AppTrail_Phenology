@@ -159,7 +159,8 @@ def predict_phenology(date_str, output_dir):
     return pred_grid, forest_mask, transform, crs
 
 
-def predict_from_pixel_state(state_path, date_str, output_dir):
+def predict_from_pixel_state(state_path, date_str, output_dir,
+                              return_features=False):
     """Predict phenological state using the compact rolling pixel state file.
 
     Used by the automated daily pipeline (GitHub Action) instead of the full
@@ -172,10 +173,14 @@ def predict_from_pixel_state(state_path, date_str, output_dir):
         date_str: ISO-format date string, e.g. '2026-09-15'.
         output_dir: Path to greendown_outputs directory containing
             norm_stats.json, decision_tree_model.joblib, and transition GeoTIFFs.
+        return_features: If True, return raw (pre-normalization) feature grids
+            as an additional dict.
 
     Returns:
-        Tuple of (pred_grid, forest_mask, transform, crs) — same as
-        predict_phenology().
+        Tuple of (pred_grid, forest_mask, transform, crs). When return_features
+        is True, a fifth element is included: a dict mapping each FEATURE_COLS
+        name to a 2D float array of shape (h, w) with raw feature values (NaN
+        for non-forest pixels).
     """
     date = datetime.date.fromisoformat(date_str)
     target_doy = date.timetuple().tm_yday
@@ -235,6 +240,9 @@ def predict_from_pixel_state(state_path, date_str, output_dir):
                              target_doy - global_avg_middle, doy_minus)
     X[:, 7] = doy_minus
 
+    # Capture raw (pre-normalization) feature values for the popup JSON
+    X_raw = X.copy()
+
     for j, col in enumerate(FEATURE_COLS):
         mean = norm_stats[col]['mean']
         std  = norm_stats[col]['std']
@@ -245,4 +253,13 @@ def predict_from_pixel_state(state_path, date_str, output_dir):
     pred_grid = np.full((h, w), 'unknown', dtype=object)
     pred_grid[r, c] = preds
 
-    return pred_grid, forest_mask, transform, crs
+    if not return_features:
+        return pred_grid, forest_mask, transform, crs
+
+    feature_grids = {}
+    for j, col in enumerate(FEATURE_COLS):
+        grid = np.full((h, w), np.nan)
+        grid[r, c] = X_raw[:, j]
+        feature_grids[col] = grid
+
+    return pred_grid, forest_mask, transform, crs, feature_grids
