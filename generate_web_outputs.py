@@ -189,11 +189,11 @@ def _render_html(web_dir, meta):
     for phase in ('start', 'middle', 'end'):
         if os.path.exists(os.path.join(web_dir, f'avg_{phase}.png')):
             avg_js += f'''
-            var map{phase} = L.map('map-{phase}', {{zoomControl: false}})
+            window['map{phase}'] = L.map('map-{phase}', {{zoomControl: false}})
                 .setView({center}, 10);
             L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',
-                {{attribution: '&copy; OpenStreetMap &copy; CARTO'}}).addTo(map{phase});
-            L.imageOverlay('avg_{phase}.png', {bounds}, {{opacity: 0.85}}).addTo(map{phase});
+                {{attribution: '&copy; OpenStreetMap &copy; CARTO'}}).addTo(window['map{phase}']);
+            L.imageOverlay('avg_{phase}.png', {bounds}, {{opacity: 0.85}}).addTo(window['map{phase}']);
             '''
 
     html = f'''<!DOCTYPE html>
@@ -271,6 +271,13 @@ function showTab(name, el) {{
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
   el.classList.add('active');
+  // Force Leaflet to recalculate map size after the container becomes visible
+  if (name === 'history') {{
+    ['start', 'middle', 'end'].forEach(function(p) {{
+      var m = window['map' + p];
+      if (m) {{ m.invalidateSize(); }}
+    }});
+  }}
 }}
 
 // Today's prediction map
