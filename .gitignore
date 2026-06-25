@@ -1,0 +1,30 @@
+# Large data files — never commit these
+greendown_outputs/hls_indices_stack_*.npy
+greendown_outputs/hls_indices_doys_*.npy
+greendown_outputs/hls_indices_ref_2*.tif
+greendown_outputs/greendown_start_2*.tif
+greendown_outputs/greendown_middle_2*.tif
+greendown_outputs/greendown_end_2*.tif
+greendown_outputs/greendown_*_ci_lower_*.tif
+greendown_outputs/greendown_*_ci_upper_*.tif
+greendown_outputs/greendown_*_ci_width_*.tif
+
+# Keep these small committed files
+!greendown_outputs/hls_indices_ref_current.tif
+!greendown_outputs/greendown_start_avg.tif
+!greendown_outputs/greendown_middle_avg.tif
+!greendown_outputs/greendown_end_avg.tif
+!greendown_outputs/norm_stats.json
+!greendown_outputs/decision_tree_model.joblib
+!greendown_outputs/pixel_state_*.npz
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Misc
+web_outputs/
+qc_outputs/
+untitled.py
+Untitled.ipynb
