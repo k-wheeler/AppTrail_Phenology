@@ -43,4 +43,7 @@ def _get_wgs84_bounds(transform, crs, h, w):
                                [0, w - 1, 0, w - 1])
     transformer = Transformer.from_crs(crs, 'EPSG:4326', always_xy=True)
     lons, lats = transformer.transform(xs, ys)
-    return [[min(lats), min(lons)], [max(lats), max(lons)]]
+    # Explicit float() conversion avoids numpy scalar repr in f-strings (numpy >= 2.0
+    # renders np.float64(x) instead of x, which breaks embedded JavaScript).
+    return [[float(min(lats)), float(min(lons))],
+            [float(max(lats)), float(max(lons))]]
