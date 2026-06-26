@@ -21,7 +21,7 @@ from fit_greendown_curves import (
     compute_curve_ci,
     compute_transition_dates_ci,
 )
-from dashboard import _pred_grid_to_rgba, _get_wgs84_bounds
+from map_utils import _pred_grid_to_rgba, _get_wgs84_bounds
 
 
 # ===========================================================================
