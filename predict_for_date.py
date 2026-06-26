@@ -16,7 +16,31 @@ from constants import NODATA
 
 PRED_YEAR = datetime.date.today().year
 FEATURE_COLS = ['EVI', 'NDVI', 'evi_delta', 'evi_delta2',
-                'ndvi_delta', 'ndvi_delta2', 'day_length_hrs', 'doy_minus_avg_middle']
+                'ndvi_delta', 'ndvi_delta2', 'day_length_hrs', 'doy_minus_avg_middle',
+                'mode_label_7day']
+
+
+def _compute_mode_7day(recent_labels, r, c):
+    """Compute ordinal mode of the 7-day rolling label history per forest pixel.
+
+    Args:
+        recent_labels: (h, w, 7) int8 array; -1 = no prediction yet,
+            0=before, 1=early, 2=late, 3=after.
+        r, c: Row and column index arrays for forest pixels (length n_px).
+
+    Returns:
+        1D float array of length n_px with mode values (0.0–3.0), or 0.0
+        (before) where no history exists.
+    """
+    rl = recent_labels[r, c, :]      # (n_px, 7)
+    mode_vals = np.zeros(len(r))
+    for i in range(len(r)):
+        v = rl[i]
+        v = v[v >= 0]
+        if len(v) > 0:
+            counts = np.bincount(v.astype(np.intp), minlength=4)
+            mode_vals[i] = float(np.argmax(counts))
+    return mode_vals
 
 
 def _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w, exclude_year=None):
@@ -207,6 +231,8 @@ def predict_phenology(date_str, output_dir):
     if not np.isnan(global_avg_middle):
         doy_minus = np.where(np.isnan(doy_minus), target_doy - global_avg_middle, doy_minus)
     X[:, 7] = doy_minus
+    # No rolling label history in the full-stack path; nan_to_num fills to normalized mean
+    X[:, 8] = np.nan
 
     # Z-score normalization using saved training statistics
     for j, col in enumerate(FEATURE_COLS):
@@ -268,6 +294,9 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
     ndvi_1 = state['ndvi_1'].astype(float)
     ndvi_2 = state['ndvi_2'].astype(float)
     h, w = evi_0.shape
+    recent_labels = (state['recent_labels']
+                     if 'recent_labels' in state.files
+                     else np.full((h, w, 7), -1, dtype=np.int8))
 
     mdl = joblib.load(os.path.join(output_dir, 'decision_tree_model.joblib'))
     with open(os.path.join(output_dir, 'norm_stats.json')) as f:
@@ -314,6 +343,7 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
         doy_minus = np.where(np.isnan(doy_minus),
                              target_doy - global_avg_middle, doy_minus)
     X[:, 7] = doy_minus
+    X[:, 8] = _compute_mode_7day(recent_labels, r, c)
 
     # Capture raw (pre-normalization) feature values for the popup JSON
     X_raw = X.copy()

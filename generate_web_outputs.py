@@ -657,6 +657,22 @@ def main():
         state_path, today_str, args.output_dir, return_features=True
     )
 
+    # Shift the 7-day rolling label history and save today's prediction into the
+    # pixel state so the mode_label_7day feature is current for tomorrow's run.
+    _label_enc = {'before': 0, 'early': 1, 'late': 2, 'after': 3}
+    _label_int = np.full(pred_grid.shape, -1, dtype=np.int8)
+    for _lbl, _val in _label_enc.items():
+        _label_int[pred_grid == _lbl] = _val
+    with np.load(state_path) as _sd:
+        _state_dict = {k: _sd[k].copy() for k in _sd.files}
+    _h, _w = _state_dict['evi_0'].shape
+    _rl = _state_dict.get('recent_labels', np.full((_h, _w, 7), -1, dtype=np.int8))
+    _rl[:, :, 1:] = _rl[:, :, :6]
+    _rl[:, :, 0] = _label_int
+    _state_dict['recent_labels'] = _rl
+    np.savez_compressed(state_path, **_state_dict)
+    print('  Updated recent_labels in pixel state.')
+
     # Save prediction PNG, warped to Web Mercator so it aligns with the basemap.
     # bounds comes from the warped raster and is reused for all overlays.
     rgba = _pred_grid_to_rgba(pred_grid, forest_mask, opacity=0.85)

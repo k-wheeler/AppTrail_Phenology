@@ -117,6 +117,11 @@ def edit_feature_table(feature_df, output_dir):
     #Imputation to fill in missing data (pixels that never have reliable transition date estimates)
     feature_df = _gap_fill_doy_minus_avg_middle(feature_df, output_dir)
 
+    # Fill mode_label_7day NaNs with 0 ('before'): occurs when no prior observation
+    # exists within the 7-day window (e.g. sparse imagery early in the season).
+    if 'mode_label_7day' in feature_df.columns:
+        feature_df['mode_label_7day'] = feature_df['mode_label_7day'].fillna(0.0)
+
     #These NaNs occur at the start of years where there aren't previous indices to compare to in the data set
     #Because these are not really needed (don't need to check for senescence at the very beginning of july) drop instead of gap fill
     feature_df = feature_df.dropna(subset=['evi_delta', 'evi_delta2', 'ndvi_delta', 'ndvi_delta2'])

@@ -43,6 +43,7 @@ def simple_feature_df():
         'ndvi_delta2':         rng.uniform(-0.1, 0.1, n),
         'day_length_hrs':      rng.uniform(9.0, 15.0, n),
         'doy_minus_avg_middle': rng.uniform(-30, 30, n),
+        'mode_label_7day':     rng.integers(0, 4, n).astype(float),
         'label':               labels,
     })
     return df
@@ -64,6 +65,7 @@ def imbalanced_feature_df():
             'ndvi_delta2':         rng.uniform(-0.1, 0.1, n),
             'day_length_hrs':      rng.uniform(9.0, 15.0, n),
             'doy_minus_avg_middle': rng.uniform(-30, 30, n),
+            'mode_label_7day':     rng.integers(0, 4, n).astype(float),
             'label':               label,
         })
         frames.append(frame)

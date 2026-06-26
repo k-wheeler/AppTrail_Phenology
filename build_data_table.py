@@ -12,6 +12,8 @@ from rasterio.transform import xy
 from filter_ci_widths import load_ci_widths
 from constants import NODATA, MAX_CI_WIDTH, CROSS_YEAR_MAX_CI_WIDTH
 
+_LABEL_ENC = {'before': 0, 'early': 1, 'late': 2, 'after': 3}
+
 
 def _build_cross_year_transition_lookup(output_dir):
     """Load transition point estimates for all years, filtered by CI width.
@@ -150,6 +152,39 @@ def _assign_label(doy, start, middle, end):
         return 'after'
 
 
+def _add_mode_label_7day(df):
+    """Add a mode_label_7day column: ordinal mode of same-pixel labels in [doy-7, doy-1].
+
+    For each observation, looks at all prior observations of the same pixel in the
+    same year whose DOY falls within the 7-day window before the current DOY.
+    Labels are encoded ordinally (before=0, early=1, late=2, after=3). Returns NaN
+    where no prior observation exists within the window.
+
+    Args:
+        df: DataFrame with columns year, doy, pixel_id, label.
+
+    Returns:
+        DataFrame with an additional mode_label_7day column (float, NaN-able).
+    """
+    mode_map = {}
+    for (_, _), grp in df.groupby(['year', 'pixel_id'], sort=False):
+        grp_sorted = grp.sort_values('doy')
+        doys = grp_sorted['doy'].values
+        encoded = np.array([_LABEL_ENC[l] for l in grp_sorted['label'].values],
+                           dtype=np.intp)
+        for i, idx in enumerate(grp_sorted.index):
+            d = doys[i]
+            window = encoded[(doys >= d - 7) & (doys < d)]
+            if len(window) > 0:
+                counts = np.bincount(window, minlength=4)
+                mode_map[idx] = float(np.argmax(counts))
+            else:
+                mode_map[idx] = float('nan')
+    df = df.copy()
+    df['mode_label_7day'] = pd.Series(mode_map)
+    return df
+
+
 def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
     """Build a labeled feature table from EVI/NDVI time series for qualifying pixel-years.
 
@@ -242,6 +277,7 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
                     'year':                      year,
                     'date':                      date,
                     'doy':                       int(doy),
+                    'pixel_id':                  f'{r}_{c}',
                     'EVI':                       float(evi),
                     'NDVI':                      float(ndvi),
                     'evi_delta':                 evi_delta,
@@ -256,13 +292,15 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
                 })
 
     df = pd.DataFrame(rows, columns=[
-        'year', 'date', 'doy', 'EVI', 'NDVI',
+        'year', 'date', 'doy', 'pixel_id', 'EVI', 'NDVI',
         'evi_delta', 'evi_delta2', 'ndvi_delta', 'ndvi_delta2',
         'day_length_hrs',
         'doy_minus_avg_start', 'doy_minus_avg_middle', 'doy_minus_avg_end',
         'label',
     ])
     print(f'\nTotal labeled phenology observations: {len(df)}')
+    df = _add_mode_label_7day(df)
+    df = df.drop(columns=['pixel_id'])
     return df
 
 
