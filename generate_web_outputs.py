@@ -211,7 +211,6 @@ def _render_html(web_dir, meta):
 <title>AT Phenology — Massachusetts</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{ font-family: sans-serif; background: #f5f5f5; color: #222; }}
@@ -295,8 +294,9 @@ L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}
     {{attribution: '&copy; OpenStreetMap contributors &copy; CARTO'}}).addTo(mapToday);
 L.imageOverlay('current_pred.png', {bounds}, {{opacity: 1.0}}).addTo(mapToday);
 
-// Pixel-click popup: load feature data once, then respond to map clicks
-var pixelData = null;
+// Pixel-click popup: each pixel stores its WGS84 centre lat/lon so lookup
+// is a simple nearest-neighbour search — no coordinate transform needed.
+var pixelArr = null;
 var FEAT_LABELS = {{
   'EVI':                  'EVI',
   'NDVI':                 'NDVI',
@@ -312,37 +312,24 @@ var LABEL_COLORS = {json.dumps(LABEL_COLORS)};
 fetch('pixel_features.json')
   .then(function(r) {{ return r.json(); }})
   .then(function(d) {{
-    pixelData = d;
-    console.log('pixel_features.json loaded:', Object.keys(d.pixels).length, 'forest pixels');
+    pixelArr = d.pixels;
+    console.log('pixel_features.json loaded:', pixelArr.length, 'forest pixels');
   }})
   .catch(function(e) {{ console.warn('pixel_features.json failed to load:', e); }});
 
+// ~2 pixel snap radius (30 m pixel ≈ 0.00027° lat)
+var SNAP_SQ = 0.0006 * 0.0006;
+
 mapToday.on('click', function(e) {{
-  console.log('map clicked; pixelData loaded:', pixelData !== null);
-  if (!pixelData) return;
+  if (!pixelArr) return;
   var lat = e.latlng.lat, lon = e.latlng.lng;
-  // Convert WGS84 click to the raster's projected CRS (UTM), then apply
-  // the inverse affine transform to get exact row/col.
-  proj4.defs('RASTER_CRS', pixelData.crs_proj4);
-  var pt = proj4('EPSG:4326', 'RASTER_CRS', [lon, lat]);
-  var t = pixelData.transform;
-  // affine: x = t[2] + col*t[0],  y = t[5] + row*t[4]  (t[1]=t[3]=0 for north-up)
-  var col = Math.floor((pt[0] - t[2]) / t[0]);
-  var row = Math.floor((pt[1] - t[5]) / t[4]);
-  var key = row + ',' + col;
-  // Search the clicked pixel and its immediate neighbors — handles clicks that
-  // land just outside the forest mask boundary of a visible colored pixel.
-  var p = null, key = null;
-  outer: for (var dr = 0; dr <= 2; dr++) {{
-    for (var dc = -dr; dc <= dr; dc++) {{
-      for (var sign = -1; sign <= 1; sign += 2) {{
-        var k = (row + dr*sign) + ',' + (col + dc);
-        if (pixelData.pixels[k]) {{ p = pixelData.pixels[k]; key = k; break outer; }}
-        k = (row + dc) + ',' + (col + dr*sign);
-        if (pixelData.pixels[k]) {{ p = pixelData.pixels[k]; key = k; break outer; }}
-      }}
-    }}
+  var best = null, bestDist = Infinity;
+  for (var i = 0; i < pixelArr.length; i++) {{
+    var px = pixelArr[i];
+    var d = (px.lat - lat) * (px.lat - lat) + (px.lon - lon) * (px.lon - lon);
+    if (d < bestDist) {{ bestDist = d; best = px; }}
   }}
+  var p = (best && bestDist <= SNAP_SQ) ? best : null;
   if (!p) return;
   var labelColor = LABEL_COLORS[p.label] || '#888';
   var rows = Object.keys(FEAT_LABELS).map(function(k) {{
@@ -484,22 +471,32 @@ def main():
         json.dump(meta, f, indent=2)
     print(f'  Saved {meta_path}')
 
-    # Write pixel feature JSON for click popups
+    # Write pixel feature JSON for click popups.
+    # Each forest pixel stores its WGS84 center lat/lon (computed in Python
+    # with pyproj) so the JS click handler can do a simple nearest-neighbour
+    # search without any browser-side coordinate transform.
     print('\nWriting pixel_features.json...')
-    pixels = {}
-    for ri, ci in zip(*np.where(forest_mask)):
-        entry = {'label': str(pred_grid[ri, ci])}
-        for col, grid in feature_grids.items():
+    from pyproj import Transformer as _Transformer
+    import rasterio.transform as _rio_transform
+    _fwd = _Transformer.from_crs(crs, 'EPSG:4326', always_xy=True)
+    forest_rows, forest_cols = np.where(forest_mask)
+    # rasterio.transform.xy returns pixel centres by default
+    px_xs, px_ys = _rio_transform.xy(transform, forest_rows.tolist(),
+                                     forest_cols.tolist())
+    px_lons, px_lats = _fwd.transform(px_xs, px_ys)
+
+    pixels = []
+    for i, (ri, ci) in enumerate(zip(forest_rows, forest_cols)):
+        entry = {
+            'lat': round(float(px_lats[i]), 6),
+            'lon': round(float(px_lons[i]), 6),
+            'label': str(pred_grid[ri, ci]),
+        }
+        for feat_col, grid in feature_grids.items():
             v = float(grid[ri, ci])
-            entry[col] = None if np.isnan(v) else round(v, 4)
-        pixels[f'{ri},{ci}'] = entry
+            entry[feat_col] = None if np.isnan(v) else round(v, 4)
+        pixels.append(entry)
     pixel_json = {
-        'nrows': int(pred_grid.shape[0]),
-        'ncols': int(pred_grid.shape[1]),
-        'bounds': bounds,
-        'crs_proj4': crs.to_proj4(),
-        'transform': [float(transform.a), float(transform.b), float(transform.c),
-                      float(transform.d), float(transform.e), float(transform.f)],
         'pixels': pixels,
     }
     feat_path = os.path.join(args.web_dir, 'pixel_features.json')
