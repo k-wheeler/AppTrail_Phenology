@@ -279,16 +279,47 @@ def _render_html(web_dir, meta):
               <img src="avg_{phase}_legend.png" class="legend-img">
             </div>'''
 
-    avg_js = ''
+    avg_js = '''
+// Convert a fractional day-of-year to a short calendar date string (e.g. "Oct 5").
+// Uses a non-leap year as the base so DOY 1 = Jan 1.
+function doyToDate(doy) {
+  var d = new Date(2001, 0, 1);
+  d.setDate(d.getDate() + Math.round(doy) - 1);
+  return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+}
+'''
     for phase in ('start', 'middle', 'end'):
         if os.path.exists(os.path.join(web_dir, f'avg_{phase}.png')):
             avg_js += f'''
-            window['map{phase}'] = L.map('map-{phase}', {{zoomControl: false}})
-                .setView({center}, 10);
-            L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',
-                {{attribution: '&copy; OpenStreetMap &copy; CARTO'}}).addTo(window['map{phase}']);
-            L.imageOverlay('avg_{phase}.png', {bounds}, {{opacity: 0.85}}).addTo(window['map{phase}']);
-            '''
+window['map{phase}'] = L.map('map-{phase}', {{zoomControl: false}})
+    .setView({center}, 10);
+L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',
+    {{attribution: '&copy; OpenStreetMap &copy; CARTO'}}).addTo(window['map{phase}']);
+L.imageOverlay('avg_{phase}.png', {bounds}, {{opacity: 0.85}}).addTo(window['map{phase}']);
+window['map{phase}'].on('click', function(e) {{
+  if (!pixelArr) return;
+  var lat = e.latlng.lat, lon = e.latlng.lng;
+  var best = null, bestDist = Infinity;
+  for (var i = 0; i < pixelArr.length; i++) {{
+    var px = pixelArr[i];
+    var d = (px.lat - lat) * (px.lat - lat) + (px.lon - lon) * (px.lon - lon);
+    if (d < bestDist) {{ bestDist = d; best = px; }}
+  }}
+  var p = (best && bestDist <= SNAP_SQ) ? best : null;
+  if (!p) return;
+  var phases = [['Avg Start', p.avg_start_doy], ['Avg Middle', p.avg_middle_doy], ['Avg End', p.avg_end_doy]];
+  var rows = phases.map(function(r) {{
+    var ds = (r[1] !== null && r[1] !== undefined) ? doyToDate(r[1]) : '&mdash;';
+    return '<tr><td style="padding:2px 10px 2px 0;color:#555">' + r[0] + '</td>' +
+           '<td style="text-align:right">' + ds + '</td></tr>';
+  }}).join('');
+  L.popup().setLatLng(e.latlng).setContent(
+    '<div style="font-size:13px;min-width:190px">' +
+    '<b>Historical Average Transition</b>' +
+    '<table style="margin-top:6px;width:100%;border-collapse:collapse">' + rows + '</table></div>'
+  ).openOn(window['map{phase}']);
+}});
+'''
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -660,6 +691,21 @@ def main():
                                     forest_cols.tolist())
     px_lons, px_lats = to_wgs84.transform(px_xs, px_ys)
 
+    # Load per-pixel historical average DOY arrays for the avg-map click popups.
+    # These tifs live on the same pixel grid as the prediction raster so (ri, ci)
+    # indices apply directly.
+    _avg_arrays = {}
+    for _phase in ('start', 'middle', 'end'):
+        _tif = os.path.join(args.output_dir, f'greendown_{_phase}_avg.tif')
+        if os.path.exists(_tif):
+            with rasterio.open(_tif) as _src:
+                _arr = _src.read(1).astype(float)
+                if _src.nodata is not None:
+                    _arr[_arr == _src.nodata] = np.nan
+            _avg_arrays[_phase] = _arr
+        else:
+            _avg_arrays[_phase] = None
+
     pixels = []
     for i, (ri, ci) in enumerate(zip(forest_rows, forest_cols)):
         entry = {
@@ -670,6 +716,12 @@ def main():
         for feat_col, grid in feature_grids.items():
             v = float(grid[ri, ci])
             entry[feat_col] = None if np.isnan(v) else round(v, 4)
+        for _phase, _arr in _avg_arrays.items():
+            if _arr is not None:
+                v = float(_arr[ri, ci])
+                entry[f'avg_{_phase}_doy'] = None if np.isnan(v) else round(v, 1)
+            else:
+                entry[f'avg_{_phase}_doy'] = None
         pixels.append(entry)
     pixel_json = {
         'pixels': pixels,
