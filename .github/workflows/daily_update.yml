@@ -26,6 +26,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Run unit tests
+        run: pytest qc_tests.py -q
+
       - name: Generate web outputs
         run: python generate_web_outputs.py --output-dir ./greendown_outputs --web-dir ./web_outputs
         env:
@@ -50,3 +53,6 @@ jobs:
           git add phenology/
           git diff --cached --quiet || git commit -m "chore: phenology update $(date -u +%F)"
           git push
+
+      - name: Health check
+        run: python health_check.py --output-dir ./greendown_outputs --web-dir ./web_outputs
