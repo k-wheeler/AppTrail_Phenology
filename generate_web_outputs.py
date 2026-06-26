@@ -23,15 +23,64 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import numpy as np
 import rasterio
+import rasterio.transform as rio_transform
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 from PIL import Image
+from pyproj import Transformer
+from rasterio.crs import CRS as RioCRS
+from rasterio.warp import calculate_default_transform, reproject, Resampling
 
 from constants import OUTPUT_DIR, LABEL_COLORS, LABEL_ORDER
-from map_utils import _pred_grid_to_rgba, _get_wgs84_bounds
+from map_utils import _pred_grid_to_rgba
 from fit_greendown_curves import update_pixel_state
 from identify_locations import identify_route_buffer, identify_forests, identify_maroute
 from predict_for_date import predict_from_pixel_state
+
+
+def _reproject_rgba_to_web(rgba, src_transform, src_crs):
+    """Reproject a native-grid RGBA image to EPSG:3857 for correct map placement.
+
+    Leaflet's imageOverlay stretches a north-up image into a lat/lon box, assuming
+    the image axes align with the map projection. A UTM raster is rotated relative
+    to that (meridian convergence), so a direct overlay is skewed by up to ~1.7 km.
+    Warping to Web Mercator (Leaflet's native CRS) removes the skew so the overlay
+    lines up with the basemap and the trail.
+
+    Args:
+        rgba: (h, w, 4) uint8 array in the source CRS grid.
+        src_transform: Affine transform of the source raster.
+        src_crs: CRS of the source raster.
+
+    Returns:
+        Tuple of (dst_rgba, bounds) where dst_rgba is the warped (H, W, 4) uint8
+        image and bounds is [[south, west], [north, east]] in WGS84.
+    """
+    h, w = rgba.shape[:2]
+    left   = src_transform.c
+    top    = src_transform.f
+    right  = left + w * src_transform.a
+    bottom = top + h * src_transform.e
+    dst_crs = RioCRS.from_epsg(3857)
+    dst_transform, dst_w, dst_h = calculate_default_transform(
+        src_crs, dst_crs, w, h, left, bottom, right, top)
+
+    dst = np.zeros((dst_h, dst_w, 4), dtype=np.uint8)
+    for band in range(4):
+        reproject(
+            source=rgba[:, :, band],
+            destination=dst[:, :, band],
+            src_transform=src_transform, src_crs=src_crs,
+            dst_transform=dst_transform, dst_crs=dst_crs,
+            resampling=Resampling.nearest)
+
+    d_left, d_top     = dst_transform * (0, 0)
+    d_right, d_bottom = dst_transform * (dst_w, dst_h)
+    to_wgs84 = Transformer.from_crs(dst_crs, 'EPSG:4326', always_xy=True)
+    west, north = to_wgs84.transform(d_left, d_top)
+    east, south = to_wgs84.transform(d_right, d_bottom)
+    bounds = [[float(south), float(west)], [float(north), float(east)]]
+    return dst, bounds
 
 
 # ---------------------------------------------------------------------------
@@ -58,14 +107,21 @@ def _init_gee():
 # Average transition DOY maps
 # ---------------------------------------------------------------------------
 
-def _render_avg_doy_png(tif_path, out_path, title, vmin=240, vmax=320):
+def _render_avg_doy_png(tif_path, out_path, title, ref_transform, ref_crs,
+                        vmin=240, vmax=320):
     """Render an average transition DOY GeoTIFF to a coloured RGBA PNG.
+
+    The avg GeoTIFFs sit on the same pixel grid as the prediction raster but
+    carry a mislabeled CRS, so we georeference them with the prediction's
+    transform/CRS (ref_transform, ref_crs) rather than the tif's own metadata.
 
     Args:
         tif_path: Path to the GeoTIFF with DOY values (NODATA = -9999).
         out_path: Path to write the output PNG.
         title: Title string for the colourbar image (saved separately as a
             legend PNG next to the map).
+        ref_transform: Affine transform of the (co-registered) prediction raster.
+        ref_crs: CRS of the prediction raster.
         vmin: Minimum DOY for the colour scale.
         vmax: Maximum DOY for the colour scale.
     """
@@ -80,7 +136,10 @@ def _render_avg_doy_png(tif_path, out_path, title, vmin=240, vmax=320):
     rgba = cmap(norm(data), bytes=True)          # (h, w, 4) uint8
     rgba[np.isnan(data)] = [0, 0, 0, 0]         # transparent where nodata
 
-    Image.fromarray(rgba, mode='RGBA').save(out_path)
+    # Warp to Web Mercator so the overlay aligns with the basemap. Same grid as
+    # the prediction, so the resulting bounds match and are reused in the HTML.
+    rgba_web, _ = _reproject_rgba_to_web(rgba, ref_transform, ref_crs)
+    Image.fromarray(rgba_web, mode='RGBA').save(out_path)
     print(f'  Saved {out_path}')
 
     # Save a colourbar legend as a separate PNG with calendar date tick labels
@@ -106,12 +165,15 @@ def _render_avg_doy_png(tif_path, out_path, title, vmin=240, vmax=320):
     print(f'  Saved {legend_path}')
 
 
-def _ensure_avg_pngs(output_dir, web_dir):
+def _ensure_avg_pngs(output_dir, web_dir, ref_transform, ref_crs):
     """Generate average transition DOY PNGs if they don't already exist.
 
     Args:
         output_dir: Directory containing greendown_*_avg.tif files.
         web_dir: Directory to write output PNGs.
+        ref_transform: Affine transform of the prediction raster (used to
+            georeference the avg tifs, which share the grid but are mislabeled).
+        ref_crs: CRS of the prediction raster.
     """
     phases = {
         'start':  'Avg Greendown Start',
@@ -124,7 +186,7 @@ def _ensure_avg_pngs(output_dir, web_dir):
         if not os.path.exists(tif_path):
             print(f'  Skipping avg {phase} PNG — GeoTIFF not found.')
             continue
-        _render_avg_doy_png(tif_path, out_path, title)
+        _render_avg_doy_png(tif_path, out_path, title, ref_transform, ref_crs)
 
 
 # ---------------------------------------------------------------------------
@@ -147,21 +209,6 @@ def _export_at_route(web_dir):
     with open(out_path, 'w') as f:
         json.dump(feature, f)
     print(f'  Saved {out_path}')
-
-
-def _bounds_to_leaflet(transform, crs, h, w):
-    """Return Leaflet-style bounds [[south, west], [north, east]].
-
-    Args:
-        transform: Affine transform of the raster.
-        crs: CRS of the raster.
-        h: Raster height in pixels.
-        w: Raster width in pixels.
-
-    Returns:
-        List [[south, west], [north, east]] in WGS84 decimal degrees.
-    """
-    return _get_wgs84_bounds(transform, crs, h, w)
 
 
 # ---------------------------------------------------------------------------
@@ -498,11 +545,12 @@ def main():
         state_path, today_str, args.output_dir, return_features=True
     )
 
-    # Save prediction PNG
+    # Save prediction PNG, warped to Web Mercator so it aligns with the basemap.
+    # bounds comes from the warped raster and is reused for all overlays.
     rgba = _pred_grid_to_rgba(pred_grid, forest_mask, opacity=0.85)
-    img  = Image.fromarray(rgba, mode='RGBA')
+    rgba_web, bounds = _reproject_rgba_to_web(rgba, transform, crs)
     pred_png_path = os.path.join(args.web_dir, 'current_pred.png')
-    img.save(pred_png_path)
+    Image.fromarray(rgba_web, mode='RGBA').save(pred_png_path)
     print(f'  Saved {pred_png_path}')
 
     # Compute area per label (sq miles)
@@ -513,7 +561,6 @@ def main():
         areas[label] = float((forest_labels == label).sum() * pixel_area_sqmi)
 
     # Write metadata JSON
-    bounds = _bounds_to_leaflet(transform, crs, *pred_grid.shape)
     meta = {'date': today_str, 'bounds': bounds, 'areas_sqmi': areas}
     meta_path = os.path.join(args.web_dir, 'current_meta.json')
     with open(meta_path, 'w') as f:
@@ -521,37 +568,22 @@ def main():
     print(f'  Saved {meta_path}')
 
     # Write pixel feature JSON for click popups.
-    # Each forest pixel's lat/lon is computed to match exactly where Leaflet's
-    # imageOverlay draws that pixel. Leaflet stretches the PNG linearly in WEB
-    # MERCATOR (the map CRS), not in latitude — so we interpolate the pixel's
-    # row in Mercator-Y space and convert back to latitude. Longitude is linear
-    # in Mercator, so columns interpolate directly. This keeps clicks aligned
-    # with the visible colored pixels across the whole north-south extent.
+    # Each forest pixel's lat/lon is its TRUE geographic centre, reprojected from
+    # the UTM grid with pyproj. Because the overlay PNG is now warped to Web
+    # Mercator (so it sits at its true geographic location), these true centres
+    # line up with the visible colored pixels and the click lookup is accurate.
     print('\nWriting pixel_features.json...')
-    south, west = bounds[0]
-    north, east = bounds[1]
-    nrows, ncols = pred_grid.shape
-
-    def _merc_y(lat):
-        return np.log(np.tan(np.pi / 4 + np.radians(lat) / 2))
-
-    def _inv_merc_y(y):
-        return np.degrees(2 * np.arctan(np.exp(y)) - np.pi / 2)
-
-    y_north = _merc_y(north)
-    y_south = _merc_y(south)
-
+    to_wgs84 = Transformer.from_crs(crs, 'EPSG:4326', always_xy=True)
     forest_rows, forest_cols = np.where(forest_mask)
-    fy = (forest_rows + 0.5) / nrows
-    fx = (forest_cols + 0.5) / ncols
-    disp_lats = _inv_merc_y(y_north - fy * (y_north - y_south))
-    disp_lons = west + fx * (east - west)
+    px_xs, px_ys = rio_transform.xy(transform, forest_rows.tolist(),
+                                    forest_cols.tolist())
+    px_lons, px_lats = to_wgs84.transform(px_xs, px_ys)
 
     pixels = []
     for i, (ri, ci) in enumerate(zip(forest_rows, forest_cols)):
         entry = {
-            'lat': round(float(disp_lats[i]), 6),
-            'lon': round(float(disp_lons[i]), 6),
+            'lat': round(float(px_lats[i]), 6),
+            'lon': round(float(px_lons[i]), 6),
             'label': str(pred_grid[ri, ci]),
         }
         for feat_col, grid in feature_grids.items():
@@ -566,9 +598,9 @@ def main():
         json.dump(pixel_json, f, separators=(',', ':'))
     print(f'  Saved {feat_path} ({os.path.getsize(feat_path) / 1024:.0f} KB)')
 
-    # Generate average transition DOY maps (one-time, skipped if already present)
+    # Generate average transition DOY maps (warped to match the prediction grid)
     print('\nChecking average transition DOY maps...')
-    _ensure_avg_pngs(args.output_dir, args.web_dir)
+    _ensure_avg_pngs(args.output_dir, args.web_dir, transform, crs)
 
     # Render HTML
     print('\nRendering index.html...')
