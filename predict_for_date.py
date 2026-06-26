@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+import warnings
 import joblib
 import numpy as np
 import rasterio
@@ -15,6 +16,35 @@ from edit_data_table import _compute_global_avg_middle
 PRED_YEAR = datetime.date.today().year
 FEATURE_COLS = ['EVI', 'NDVI', 'evi_delta', 'evi_delta2',
                 'ndvi_delta', 'ndvi_delta2', 'day_length_hrs', 'doy_minus_avg_middle']
+
+
+def _per_pixel_avg_middle(cross_year_lookup, h, w, exclude_year=None):
+    """Average middle-transition DOY per pixel across historical years.
+
+    Mirrors the cross-year averaging used when building the training table
+    (build_feature_table): for each pixel, average the middle-transition DOY
+    over all available years except exclude_year. This is the value the model
+    was trained on, so prediction must use the same per-pixel average rather
+    than a single global constant.
+
+    Args:
+        cross_year_lookup: Dict {year: {phase: array(h, w)}} from
+            _build_cross_year_transition_lookup.
+        h: Raster height in pixels.
+        w: Raster width in pixels.
+        exclude_year: Year to omit from the average (the prediction year).
+
+    Returns:
+        Array of shape (h, w) with the mean middle-transition DOY per pixel,
+        NaN where no year has a valid value.
+    """
+    arrs = [cross_year_lookup[yr]['middle']
+            for yr in cross_year_lookup if yr != exclude_year]
+    if not arrs:
+        return np.full((h, w), np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', category=RuntimeWarning)  # all-NaN slices
+        return np.nanmean(np.stack(arrs), axis=0)
 
 
 def predict_phenology(date_str, output_dir):
@@ -122,13 +152,11 @@ def predict_phenology(date_str, output_dir):
     X[:, 6] = np.array([_day_length(target_doy, float(lat_array[ri, ci]))
                         for ri, ci in zip(r, c)])    # day_length_hrs
 
-    # doy_minus_avg_middle: per-pixel cross-year average, gap-fill with global avg
-    doy_minus = np.full(n_px, np.nan)
-    if PRED_YEAR in cross_year_lookup:
-        mid_arr = cross_year_lookup[PRED_YEAR]['middle']
-        doy_minus = np.where(np.isfinite(mid_arr[r, c]),
-                             target_doy - mid_arr[r, c],
-                             np.nan)
+    # doy_minus_avg_middle: per-pixel average of the middle-transition DOY
+    # across historical years, gap-filled with the global average.
+    avg_middle = _per_pixel_avg_middle(cross_year_lookup, h, w, exclude_year=PRED_YEAR)
+    doy_minus = np.where(np.isfinite(avg_middle[r, c]),
+                         target_doy - avg_middle[r, c], np.nan)
     # Gap-fill remaining NaNs
     if not np.isnan(global_avg_middle):
         doy_minus = np.where(np.isnan(doy_minus), target_doy - global_avg_middle, doy_minus)
@@ -230,11 +258,11 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
     X[:, 6] = np.array([_day_length(target_doy, float(lat_array[ri, ci]))
                         for ri, ci in zip(r, c)])
 
-    doy_minus = np.full(n_px, np.nan)
-    if year in cross_year_lookup:
-        mid_arr = cross_year_lookup[year]['middle']
-        doy_minus = np.where(np.isfinite(mid_arr[r, c]),
-                             target_doy - mid_arr[r, c], np.nan)
+    # doy_minus_avg_middle: per-pixel average of the middle-transition DOY
+    # across historical years, gap-filled with the global average.
+    avg_middle = _per_pixel_avg_middle(cross_year_lookup, h, w, exclude_year=year)
+    doy_minus = np.where(np.isfinite(avg_middle[r, c]),
+                         target_doy - avg_middle[r, c], np.nan)
     if not np.isnan(global_avg_middle):
         doy_minus = np.where(np.isnan(doy_minus),
                              target_doy - global_avg_middle, doy_minus)
