@@ -52,8 +52,11 @@ def _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w, exclude_year=None
             warnings.simplefilter('ignore', category=RuntimeWarning)  # all-NaN slices
             return np.nanmean(np.stack(arrs), axis=0)
 
-    # Fallback: committed pixel-wise average tif (Action environment)
-    avg_path = os.path.join(output_dir, 'greendown_middle_avg.tif')
+    # Fallback: committed CI-filtered cross-year average tif (Action environment).
+    # This is precomputed by build_data_table.export_prediction_avg_assets and
+    # matches the per-pixel average used during training (NOT greendown_middle_avg.tif,
+    # which is an unfiltered mean and differs by ~14 days).
+    avg_path = os.path.join(output_dir, 'greendown_middle_avg_filtered.tif')
     if os.path.exists(avg_path):
         with rasterio.open(avg_path) as src:
             avg = src.read(1).astype(float)
@@ -64,6 +67,29 @@ def _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w, exclude_year=None
         return avg
 
     return np.full((h, w), np.nan)
+
+
+def _load_global_avg_middle(output_dir):
+    """Global gap-fill middle-transition DOY, with a committed fallback.
+
+    Prefers the live computation from per-year CI GeoTIFFs; if those are absent
+    (the Action environment), reads the precomputed value from
+    greendown_avg_meta.json written by export_prediction_avg_assets.
+
+    Args:
+        output_dir: Path to greendown_outputs.
+
+    Returns:
+        Global average middle-transition DOY as a float, or NaN if unavailable.
+    """
+    val = _compute_global_avg_middle(output_dir)
+    if not np.isnan(val):
+        return val
+    meta_path = os.path.join(output_dir, 'greendown_avg_meta.json')
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            return float(json.load(f).get('global_avg_middle', np.nan))
+    return val
 
 
 def predict_phenology(date_str, output_dir):
@@ -113,7 +139,7 @@ def predict_phenology(date_str, output_dir):
 
     # Cross-year middle transition DOY lookup (excludes 2025 automatically)
     cross_year_lookup = _build_cross_year_transition_lookup(output_dir)
-    global_avg_middle = _compute_global_avg_middle(output_dir)
+    global_avg_middle = _load_global_avg_middle(output_dir)
 
     # Indices of images at or before target_doy, sorted newest-first
     valid_t = np.where(doys <= target_doy)[0]
@@ -257,7 +283,7 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
 
     lat_array = _load_lat_array(output_dir, year)
     cross_year_lookup = _build_cross_year_transition_lookup(output_dir)
-    global_avg_middle = _compute_global_avg_middle(output_dir)
+    global_avg_middle = _load_global_avg_middle(output_dir)
 
     # Forest mask: pixels with at least one valid observation in the state
     forest_mask = np.isfinite(evi_0) & (evi_0 > 0)

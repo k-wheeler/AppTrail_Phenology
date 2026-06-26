@@ -14,6 +14,8 @@ greendown_outputs/greendown_*_ci_width_*.tif
 !greendown_outputs/greendown_start_avg.tif
 !greendown_outputs/greendown_middle_avg.tif
 !greendown_outputs/greendown_end_avg.tif
+!greendown_outputs/greendown_middle_avg_filtered.tif
+!greendown_outputs/greendown_avg_meta.json
 !greendown_outputs/norm_stats.json
 !greendown_outputs/decision_tree_model.joblib
 !greendown_outputs/pixel_state_*.npz

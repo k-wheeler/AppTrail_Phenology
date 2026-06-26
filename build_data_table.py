@@ -264,3 +264,57 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
     ])
     print(f'\nTotal labeled phenology observations: {len(df)}')
     return df
+
+
+def export_prediction_avg_assets(output_dir):
+    """Write the committed assets the live prediction needs for doy_minus_avg_middle.
+
+    The automated Action does not have the per-year transition GeoTIFFs (they are
+    gitignored), so it cannot rebuild the CI-filtered cross-year average or the
+    global gap-fill scalar on the fly — the values the model was trained on.
+    This precomputes both from the local per-year tifs and writes them as small
+    committed files:
+
+      - greendown_middle_avg_filtered.tif: per-pixel CI-filtered cross-year mean
+        middle-transition DOY (matches the per-pixel average in build_feature_table).
+      - greendown_avg_meta.json: {"global_avg_middle": <scalar>}, the gap-fill
+        value used for pixels with no confident per-pixel estimate.
+
+    Run this whenever the per-year transition GeoTIFFs are regenerated (i.e. after
+    re-fitting greendown curves), then commit the two output files.
+
+    Args:
+        output_dir: Path to greendown_outputs containing the per-year transition
+            and CI-width GeoTIFFs.
+    """
+    import json
+    import warnings
+    from edit_data_table import _compute_global_avg_middle
+
+    lookup = _build_cross_year_transition_lookup(output_dir)
+    if not lookup:
+        print('  No per-year transition tifs found; cannot export prediction avg assets.')
+        return
+
+    arrs = [lookup[yr]['middle'] for yr in lookup]
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', category=RuntimeWarning)  # all-NaN slices
+        avg = np.nanmean(np.stack(arrs), axis=0).astype(np.float32)
+
+    ref_path = os.path.join(output_dir, 'greendown_middle_avg.tif')
+    with rasterio.open(ref_path) as src:
+        profile = src.profile
+    out = avg.copy()
+    out[np.isnan(out)] = NODATA
+    tif_path = os.path.join(output_dir, 'greendown_middle_avg_filtered.tif')
+    with rasterio.open(tif_path, 'w', **profile) as dst:
+        dst.write(out, 1)
+
+    global_avg = _compute_global_avg_middle(output_dir)
+    meta_path = os.path.join(output_dir, 'greendown_avg_meta.json')
+    with open(meta_path, 'w') as f:
+        json.dump({'global_avg_middle': float(global_avg)}, f, indent=2)
+
+    n_valid = int(np.isfinite(avg).sum())
+    print(f'  Wrote {tif_path} ({n_valid} valid pixels)')
+    print(f'  Wrote {meta_path} (global_avg_middle = {global_avg:.2f})')
