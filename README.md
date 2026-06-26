@@ -12,7 +12,7 @@ Daily satellite-based fall foliage tracker for the Massachusetts Appalachian Tra
 
 This project monitors ~15,000 30×30 m forest pixels along the Massachusetts AT using NASA Harmonized Landsat (HLS) imagery fetched daily from Google Earth Engine. For each pixel, a decreasing logistic curve is fitted to its multi-year EVI time series to estimate the day-of-year when fall foliage color change starts, peaks, and ends.
 
-A decision tree classifier trained on 10 years of labeled pixel-observations uses 8 features — current EVI and NDVI, their recent changes, day length, and days relative to each pixel's historical average mid-transition date — to assign one of four phenological states: **Before**, **Early**, **Late**, or **After** (color change complete).
+A decision tree classifier trained on 10 years of labeled pixel-observations uses 9 features — current EVI and NDVI, their recent changes, day length, days relative to each pixel's historical average mid-transition date, and the most common (mode) predicted label over the past 7 days — to assign one of four phenological states: **Before**, **Early**, **Late**, or **After** (color change complete). The 7-day rolling label history is stored in `pixel_state_{year}.npz` and committed to the repo daily, giving the model a temporal consistency signal across successive predictions.
 
 Each morning the pipeline fetches new imagery, updates a rolling pixel state, reruns predictions across all forest pixels, and publishes results as a fully static Leaflet interactive map on GitHub Pages.
 
@@ -48,7 +48,7 @@ Large `.npy` stacks (~2.5 GB/year) live only on the local machine and are never 
 | File | Role |
 |---|---|
 | `generate_web_outputs.py` | GEE auth, pixel-state update, prediction, HTML/PNG/JSON rendering |
-| `predict_for_date.py` | Loads pixel state, builds 8-feature matrix, runs z-score + decision tree |
+| `predict_for_date.py` | Loads pixel state, builds 9-feature matrix, runs z-score + decision tree |
 | `fit_greendown_curves.py` | Downloads HLS imagery, fits logistic curves, updates `pixel_state_{year}.npz` |
 | `map_utils.py` | Raster-to-RGBA rendering, WGS84 bounds, Web Mercator warp |
 | `health_check.py` | Post-run QC: verifies outputs, pixel counts, freshness; exits 1 on failure |

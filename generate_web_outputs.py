@@ -422,18 +422,21 @@ window['map{phase}'].on('click', function(e) {{
       pixel&rsquo;s EVI time series to estimate when foliage change starts, peaks, and ends,
       along with 95% confidence intervals.</li>
       <li><strong>Machine learning</strong> &mdash; A decision tree classifier trained on 10 years
-      of labeled pixel-observations uses 8 features (EVI, NDVI, their recent changes, day length,
-      and days relative to that pixel&rsquo;s historical average mid-transition date) to assign
-      one of four states: Before, Early, Late, or After.</li>
+      of labeled pixel-observations uses 9 features (EVI, NDVI, their recent changes, day length,
+      days relative to that pixel&rsquo;s historical average mid-transition date, and the most
+      common predicted label over the past 7 days) to assign one of four states: Before, Early,
+      Late, or After. The 7-day rolling history gives the model a temporal consistency signal
+      across successive predictions.</li>
       <li><strong>Daily update</strong> &mdash; Each morning, new imagery is fetched, a rolling
       window of the 3 most recent valid observations is updated, and predictions are recomputed
-      for all ~15,000 forest pixels.</li>
+      for all ~15,000 forest pixels. Today&rsquo;s predictions are stored and used as part of
+      tomorrow&rsquo;s feature set.</li>
     </ol>
 
     <h3>Interacting with the map</h3>
     <ul>
-      <li>Click any colored pixel to see the raw satellite values and model features used to
-      make that prediction.</li>
+      <li>Click any colored pixel to see the raw satellite values, model features, and a
+      7-day prediction history for that location.</li>
       <li>Zoom in to explore individual 30 m pixels.</li>
       <li>The <em>Historical Averages</em> tab shows the long-term average start, middle, and
       end of greendown, giving context for how this year compares to prior years.</li>
