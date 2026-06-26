@@ -245,6 +245,7 @@ def _render_html(web_dir, meta):
   .avg-panel {{ display: flex; flex-direction: column; gap: 8px; }}
   .avg-panel h3 {{ font-size: 0.95rem; color: #444; }}
   .legend-img {{ max-width: 300px; border-radius: 4px; }}
+  .leaflet-image-layer {{ image-rendering: pixelated; }}
 </style>
 </head>
 <body>
@@ -309,8 +310,11 @@ var LABEL_COLORS = {json.dumps(LABEL_COLORS)};
 
 fetch('pixel_features.json')
   .then(function(r) {{ return r.json(); }})
-  .then(function(d) {{ pixelData = d; }})
-  .catch(function(e) {{ console.warn('pixel_features.json not loaded:', e); }});
+  .then(function(d) {{
+    pixelData = d;
+    console.log('pixel_features.json loaded:', Object.keys(d.pixels).length, 'forest pixels');
+  }})
+  .catch(function(e) {{ console.warn('pixel_features.json failed to load:', e); }});
 
 mapToday.on('click', function(e) {{
   if (!pixelData) return;
