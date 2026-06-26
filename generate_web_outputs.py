@@ -483,6 +483,9 @@ var FEAT_LABELS = {{
   'doy_minus_avg_middle': 'Days from avg mid-transition'
 }};
 var LABEL_COLORS = {json.dumps(LABEL_COLORS)};
+var LABEL_COLORS_HEX = {{
+  'before': '#4682b4', 'early': '#228b22', 'late': '#ff8c00', 'after': '#cc0000'
+}};
 
 fetch('pixel_features.json?v=' + Date.now())
   .then(function(r) {{ return r.json(); }})
@@ -519,10 +522,19 @@ mapToday.on('click', function(e) {{
     return '<tr><td style="padding:2px 10px 2px 0;color:#555">' + FEAT_LABELS[k] + '</td>' +
            '<td style="text-align:right;font-variant-numeric:tabular-nums">' + val + '</td></tr>';
   }}).join('');
+  var histArr = (p.recent_labels || []);
+  var histChips = histArr.map(function(l) {{
+    if (!l) return '<span style="color:#bbb">&mdash;</span>';
+    var col = LABEL_COLORS_HEX[l] || '#888';
+    return '<span style="color:' + col + ';font-weight:600">' +
+           l.charAt(0).toUpperCase() + l.slice(1) + '</span>';
+  }}).join('<span style="color:#ccc"> &middot; </span>');
   var html = '<div style="font-size:13px;min-width:230px">' +
     '<b>Predicted: <span style="color:' + labelColor + '">' +
     p.label.charAt(0).toUpperCase() + p.label.slice(1) + '</span></b>' +
-    '<table style="margin-top:6px;width:100%;border-collapse:collapse">' +
+    '<div style="margin-top:6px;font-size:11px;color:#777">7-day history (newest → oldest)</div>' +
+    '<div style="margin-bottom:6px;font-size:12px">' + histChips + '</div>' +
+    '<table style="width:100%;border-collapse:collapse">' +
     rows + '</table>' +
     '<p style="margin-top:8px;font-size:11px;color:#999;line-height:1.4">' +
     'EVI/NDVI: vegetation greenness (0–1, higher = greener). ' +
@@ -660,6 +672,7 @@ def main():
     # Shift the 7-day rolling label history and save today's prediction into the
     # pixel state so the mode_label_7day feature is current for tomorrow's run.
     _label_enc = {'before': 0, 'early': 1, 'late': 2, 'after': 3}
+    _label_dec = {-1: None, 0: 'before', 1: 'early', 2: 'late', 3: 'after'}
     _label_int = np.full(pred_grid.shape, -1, dtype=np.int8)
     for _lbl, _val in _label_enc.items():
         _label_int[pred_grid == _lbl] = _val
@@ -667,6 +680,8 @@ def main():
         _state_dict = {k: _sd[k].copy() for k in _sd.files}
     _h, _w = _state_dict['evi_0'].shape
     _rl = _state_dict.get('recent_labels', np.full((_h, _w, 7), -1, dtype=np.int8))
+    # Capture pre-shift labels for popup display (these are the 7 prior-day predictions)
+    _rl_prev = _rl.copy()
     _rl[:, :, 1:] = _rl[:, :, :6]
     _rl[:, :, 0] = _label_int
     _state_dict['recent_labels'] = _rl
@@ -738,6 +753,7 @@ def main():
                 entry[f'avg_{_phase}_doy'] = None if np.isnan(v) else round(v, 1)
             else:
                 entry[f'avg_{_phase}_doy'] = None
+        entry['recent_labels'] = [_label_dec[int(_rl_prev[ri, ci, j])] for j in range(7)]
         pixels.append(entry)
     pixel_json = {
         'pixels': pixels,
