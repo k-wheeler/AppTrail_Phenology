@@ -30,7 +30,7 @@ from PIL import Image
 from constants import OUTPUT_DIR, LABEL_COLORS, LABEL_ORDER
 from map_utils import _pred_grid_to_rgba, _get_wgs84_bounds
 from fit_greendown_curves import update_pixel_state
-from identify_locations import identify_route_buffer, identify_forests
+from identify_locations import identify_route_buffer, identify_forests, identify_maroute
 from predict_for_date import predict_from_pixel_state
 
 
@@ -131,6 +131,24 @@ def _ensure_avg_pngs(output_dir, web_dir):
 # PNG bounds helper
 # ---------------------------------------------------------------------------
 
+def _export_at_route(web_dir):
+    """Write the MA Appalachian Trail centerline to web_dir/at_route.geojson.
+
+    Pulls the Massachusetts-clipped AT route geometry from GEE and saves it as a
+    GeoJSON Feature so the Leaflet maps can draw the trail line. Requires GEE to
+    be initialized.
+
+    Args:
+        web_dir: Directory to write at_route.geojson.
+    """
+    geom = identify_maroute().getInfo()
+    feature = {'type': 'Feature', 'geometry': geom, 'properties': {}}
+    out_path = os.path.join(web_dir, 'at_route.geojson')
+    with open(out_path, 'w') as f:
+        json.dump(feature, f)
+    print(f'  Saved {out_path}')
+
+
 def _bounds_to_leaflet(transform, crs, h, w):
     """Return Leaflet-style bounds [[south, west], [north, east]].
 
@@ -169,6 +187,9 @@ def _render_html(web_dir, meta):
         f'<span>{l.capitalize()}</span>'
         for l in LABEL_ORDER if l != 'unknown'
     )
+    # Trail line entry (line swatch, not a filled square)
+    legend_rows += ('<span class="swatch" style="background:#202020;height:3px">'
+                    '</span><span>Appalachian Trail</span>')
 
     # Build histogram bars
     total_area = sum(v for k, v in areas.items() if k != 'unknown') or 1
@@ -354,6 +375,23 @@ mapToday.on('click', function(e) {{
 
 // Average transition maps
 {avg_js}
+
+// Appalachian Trail centerline overlay on every map
+var atRoute = null;
+function addRoute(map) {{
+  if (map && atRoute) {{
+    L.geoJSON(atRoute, {{style: {{color: '#202020', weight: 1.5, opacity: 0.85}}}})
+      .addTo(map);
+  }}
+}}
+fetch('at_route.geojson')
+  .then(function(r) {{ return r.json(); }})
+  .then(function(gj) {{
+    atRoute = gj;
+    addRoute(mapToday);
+    ['start', 'middle', 'end'].forEach(function(p) {{ addRoute(window['map' + p]); }});
+  }})
+  .catch(function(e) {{ console.warn('at_route.geojson not loaded:', e); }});
 </script>
 </body>
 </html>
@@ -417,6 +455,10 @@ def main():
         return
 
     _init_gee()
+
+    # Export the AT centerline for the map overlays
+    print('\nExporting Appalachian Trail route...')
+    _export_at_route(args.web_dir)
 
     # GEE objects — collection starts Jun 1 to cover the full monitoring season
     route_buffer = identify_route_buffer()
