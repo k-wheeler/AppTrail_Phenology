@@ -309,7 +309,7 @@ var FEAT_LABELS = {{
 }};
 var LABEL_COLORS = {json.dumps(LABEL_COLORS)};
 
-fetch('pixel_features.json')
+fetch('pixel_features.json?v=' + Date.now())
   .then(function(r) {{ return r.json(); }})
   .then(function(d) {{
     pixelArr = d.pixels;
