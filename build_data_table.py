@@ -290,6 +290,7 @@ def export_prediction_avg_assets(output_dir):
     import json
     import warnings
     from edit_data_table import _compute_global_avg_middle
+    from fit_greendown_curves import _canonical_crs
 
     lookup = _build_cross_year_transition_lookup(output_dir)
     if not lookup:
@@ -304,6 +305,11 @@ def export_prediction_avg_assets(output_dir):
     ref_path = os.path.join(output_dir, 'greendown_middle_avg.tif')
     with rasterio.open(ref_path) as src:
         profile = src.profile
+    # Use the authoritative CRS from the reference raster (the avg tifs have
+    # historically carried a mislabeled CRS).
+    ref_crs = _canonical_crs(output_dir)
+    if ref_crs is not None:
+        profile.update(crs=ref_crs)
     out = avg.copy()
     out[np.isnan(out)] = NODATA
     tif_path = os.path.join(output_dir, 'greendown_middle_avg_filtered.tif')

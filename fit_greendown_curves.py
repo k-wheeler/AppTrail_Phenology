@@ -1,4 +1,5 @@
 import datetime
+import glob
 import os
 import numpy as np
 import ee
@@ -486,6 +487,29 @@ def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
     return state_path
 
 
+def _canonical_crs(output_dir):
+    """Return the authoritative CRS from a reference raster, or None.
+
+    Guards against transition GeoTIFFs that may carry a mislabeled CRS by
+    sourcing the CRS from the hls_indices_ref rasters, which are written
+    directly from the GEE download.
+
+    Args:
+        output_dir: Directory containing hls_indices_ref_*.tif.
+
+    Returns:
+        A rasterio CRS, or None if no reference raster is found.
+    """
+    candidates = [os.path.join(output_dir, 'hls_indices_ref_current.tif')]
+    candidates += sorted(glob.glob(os.path.join(output_dir, 'hls_indices_ref_*.tif')))
+    for path in candidates:
+        if os.path.exists(path):
+            with rasterio.open(path) as src:
+                if src.crs is not None:
+                    return src.crs
+    return None
+
+
 def compute_average_transition_dates(paths_by_year, output_dir='.'):
     """Compute pixel-wise mean transition DOYs across years.
 
@@ -497,6 +521,7 @@ def compute_average_transition_dates(paths_by_year, output_dir='.'):
     Returns:
         Dict of {'start': path, 'middle': path, 'end': path} for averaged rasters.
     """
+    ref_crs = _canonical_crs(output_dir)
     avg_paths = {}
     for phase in ('start', 'middle', 'end'):
         arrays  = []
@@ -513,6 +538,11 @@ def compute_average_transition_dates(paths_by_year, output_dir='.'):
 
         mean = np.nanmean(np.stack(arrays, axis=0), axis=0).astype(np.float32)
         mean[np.isnan(mean)] = NODATA
+
+        # Use the authoritative CRS from the reference raster, not the per-year
+        # tif's (which has historically been mislabeled).
+        if ref_crs is not None:
+            profile.update(crs=ref_crs)
 
         path = os.path.join(output_dir, f'greendown_{phase}_avg.tif')
         with rasterio.open(path, 'w', **profile) as dst:
