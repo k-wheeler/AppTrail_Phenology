@@ -319,8 +319,9 @@ fetch('pixel_features.json?v=' + Date.now())
   }})
   .catch(function(e) {{ console.warn('pixel_features.json failed to load:', e); }});
 
-// ~2 pixel snap radius (30 m pixel ≈ 0.00027° lat)
-var SNAP_SQ = 0.0006 * 0.0006;
+// ~1.5 pixel snap radius (30 m pixel ≈ 0.00027° lat); clicks farther than
+// this from any forest pixel show no popup.
+var SNAP_SQ = 0.0004 * 0.0004;
 
 mapToday.on('click', function(e) {{
   if (!pixelArr) {{ console.log('click ignored — pixelArr not loaded yet'); return; }}
@@ -478,25 +479,37 @@ def main():
     print(f'  Saved {meta_path}')
 
     # Write pixel feature JSON for click popups.
-    # Each forest pixel's lat/lon is computed by the SAME linear interpolation
-    # Leaflet's imageOverlay uses to place the PNG inside `bounds`. This makes
-    # the stored coordinate match exactly where the pixel is drawn on the map,
-    # so clicks align with the visible colored pixels regardless of the
-    # underlying UTM projection (a true pyproj reprojection does NOT match,
-    # because imageOverlay only does a linear stretch).
+    # Each forest pixel's lat/lon is computed to match exactly where Leaflet's
+    # imageOverlay draws that pixel. Leaflet stretches the PNG linearly in WEB
+    # MERCATOR (the map CRS), not in latitude — so we interpolate the pixel's
+    # row in Mercator-Y space and convert back to latitude. Longitude is linear
+    # in Mercator, so columns interpolate directly. This keeps clicks aligned
+    # with the visible colored pixels across the whole north-south extent.
     print('\nWriting pixel_features.json...')
     south, west = bounds[0]
     north, east = bounds[1]
     nrows, ncols = pred_grid.shape
+
+    def _merc_y(lat):
+        return np.log(np.tan(np.pi / 4 + np.radians(lat) / 2))
+
+    def _inv_merc_y(y):
+        return np.degrees(2 * np.arctan(np.exp(y)) - np.pi / 2)
+
+    y_north = _merc_y(north)
+    y_south = _merc_y(south)
+
     forest_rows, forest_cols = np.where(forest_mask)
+    fy = (forest_rows + 0.5) / nrows
+    fx = (forest_cols + 0.5) / ncols
+    disp_lats = _inv_merc_y(y_north - fy * (y_north - y_south))
+    disp_lons = west + fx * (east - west)
 
     pixels = []
-    for ri, ci in zip(forest_rows, forest_cols):
-        disp_lat = north - (ri + 0.5) / nrows * (north - south)
-        disp_lon = west  + (ci + 0.5) / ncols * (east - west)
+    for i, (ri, ci) in enumerate(zip(forest_rows, forest_cols)):
         entry = {
-            'lat': round(float(disp_lat), 6),
-            'lon': round(float(disp_lon), 6),
+            'lat': round(float(disp_lats[i]), 6),
+            'lon': round(float(disp_lons[i]), 6),
             'label': str(pred_grid[ri, ci]),
         }
         for feat_col, grid in feature_grids.items():
