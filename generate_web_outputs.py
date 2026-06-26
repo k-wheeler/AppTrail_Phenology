@@ -478,24 +478,25 @@ def main():
     print(f'  Saved {meta_path}')
 
     # Write pixel feature JSON for click popups.
-    # Each forest pixel stores its WGS84 center lat/lon (computed in Python
-    # with pyproj) so the JS click handler can do a simple nearest-neighbour
-    # search without any browser-side coordinate transform.
+    # Each forest pixel's lat/lon is computed by the SAME linear interpolation
+    # Leaflet's imageOverlay uses to place the PNG inside `bounds`. This makes
+    # the stored coordinate match exactly where the pixel is drawn on the map,
+    # so clicks align with the visible colored pixels regardless of the
+    # underlying UTM projection (a true pyproj reprojection does NOT match,
+    # because imageOverlay only does a linear stretch).
     print('\nWriting pixel_features.json...')
-    from pyproj import Transformer as _Transformer
-    import rasterio.transform as _rio_transform
-    _fwd = _Transformer.from_crs(crs, 'EPSG:4326', always_xy=True)
+    south, west = bounds[0]
+    north, east = bounds[1]
+    nrows, ncols = pred_grid.shape
     forest_rows, forest_cols = np.where(forest_mask)
-    # rasterio.transform.xy returns pixel centres by default
-    px_xs, px_ys = _rio_transform.xy(transform, forest_rows.tolist(),
-                                     forest_cols.tolist())
-    px_lons, px_lats = _fwd.transform(px_xs, px_ys)
 
     pixels = []
-    for i, (ri, ci) in enumerate(zip(forest_rows, forest_cols)):
+    for ri, ci in zip(forest_rows, forest_cols):
+        disp_lat = north - (ri + 0.5) / nrows * (north - south)
+        disp_lon = west  + (ci + 0.5) / ncols * (east - west)
         entry = {
-            'lat': round(float(px_lats[i]), 6),
-            'lon': round(float(px_lons[i]), 6),
+            'lat': round(float(disp_lat), 6),
+            'lon': round(float(disp_lon), 6),
             'label': str(pred_grid[ri, ci]),
         }
         for feat_col, grid in feature_grids.items():
