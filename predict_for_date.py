@@ -12,13 +12,14 @@ from build_data_table import (
     _build_cross_year_transition_lookup,
 )
 from edit_data_table import _compute_global_avg_middle
+from constants import NODATA
 
 PRED_YEAR = datetime.date.today().year
 FEATURE_COLS = ['EVI', 'NDVI', 'evi_delta', 'evi_delta2',
                 'ndvi_delta', 'ndvi_delta2', 'day_length_hrs', 'doy_minus_avg_middle']
 
 
-def _per_pixel_avg_middle(cross_year_lookup, h, w, exclude_year=None):
+def _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w, exclude_year=None):
     """Average middle-transition DOY per pixel across historical years.
 
     Mirrors the cross-year averaging used when building the training table
@@ -27,24 +28,42 @@ def _per_pixel_avg_middle(cross_year_lookup, h, w, exclude_year=None):
     was trained on, so prediction must use the same per-pixel average rather
     than a single global constant.
 
+    When the per-year transition GeoTIFFs are not available (e.g. in the
+    automated Action environment, where they are gitignored), falls back to the
+    committed greendown_middle_avg.tif, which is itself the per-pixel mean
+    middle-transition DOY across all years.
+
     Args:
         cross_year_lookup: Dict {year: {phase: array(h, w)}} from
             _build_cross_year_transition_lookup.
+        output_dir: Directory containing greendown_middle_avg.tif (fallback).
         h: Raster height in pixels.
         w: Raster width in pixels.
         exclude_year: Year to omit from the average (the prediction year).
 
     Returns:
         Array of shape (h, w) with the mean middle-transition DOY per pixel,
-        NaN where no year has a valid value.
+        NaN where no value is available.
     """
     arrs = [cross_year_lookup[yr]['middle']
             for yr in cross_year_lookup if yr != exclude_year]
-    if not arrs:
-        return np.full((h, w), np.nan)
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', category=RuntimeWarning)  # all-NaN slices
-        return np.nanmean(np.stack(arrs), axis=0)
+    if arrs:
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', category=RuntimeWarning)  # all-NaN slices
+            return np.nanmean(np.stack(arrs), axis=0)
+
+    # Fallback: committed pixel-wise average tif (Action environment)
+    avg_path = os.path.join(output_dir, 'greendown_middle_avg.tif')
+    if os.path.exists(avg_path):
+        with rasterio.open(avg_path) as src:
+            avg = src.read(1).astype(float)
+            nd = src.nodata
+        if nd is not None:
+            avg[avg == nd] = np.nan
+        avg[avg == NODATA] = np.nan
+        return avg
+
+    return np.full((h, w), np.nan)
 
 
 def predict_phenology(date_str, output_dir):
@@ -154,7 +173,8 @@ def predict_phenology(date_str, output_dir):
 
     # doy_minus_avg_middle: per-pixel average of the middle-transition DOY
     # across historical years, gap-filled with the global average.
-    avg_middle = _per_pixel_avg_middle(cross_year_lookup, h, w, exclude_year=PRED_YEAR)
+    avg_middle = _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w,
+                                       exclude_year=PRED_YEAR)
     doy_minus = np.where(np.isfinite(avg_middle[r, c]),
                          target_doy - avg_middle[r, c], np.nan)
     # Gap-fill remaining NaNs
@@ -260,7 +280,8 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
 
     # doy_minus_avg_middle: per-pixel average of the middle-transition DOY
     # across historical years, gap-filled with the global average.
-    avg_middle = _per_pixel_avg_middle(cross_year_lookup, h, w, exclude_year=year)
+    avg_middle = _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w,
+                                       exclude_year=year)
     doy_minus = np.where(np.isfinite(avg_middle[r, c]),
                          target_doy - avg_middle[r, c], np.nan)
     if not np.isnan(global_avg_middle):
