@@ -196,6 +196,9 @@ def main():
     parser = argparse.ArgumentParser(description='Daily pipeline health check.')
     parser.add_argument('--output-dir', default='./greendown_outputs')
     parser.add_argument('--web-dir', default='./web_outputs')
+    # TEMPORARY: remove after confirming failure emails work
+    print('TEST FAILURE — remove this line after confirming email notifications work')
+    sys.exit(1)
     args = parser.parse_args()
 
     today = datetime.date.today()
