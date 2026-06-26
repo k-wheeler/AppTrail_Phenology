@@ -330,9 +330,19 @@ mapToday.on('click', function(e) {{
   var col = Math.floor((pt[0] - t[2]) / t[0]);
   var row = Math.floor((pt[1] - t[5]) / t[4]);
   var key = row + ',' + col;
-  console.log('click lat/lon:', lat, lon, '→ UTM:', pt[0].toFixed(1), pt[1].toFixed(1),
-              '→ row:', row, 'col:', col, '→ key:', key, '→ found:', key in pixelData.pixels);
-  var p = pixelData.pixels[key];
+  // Search the clicked pixel and its immediate neighbors — handles clicks that
+  // land just outside the forest mask boundary of a visible colored pixel.
+  var p = null, key = null;
+  outer: for (var dr = 0; dr <= 2; dr++) {{
+    for (var dc = -dr; dc <= dr; dc++) {{
+      for (var sign = -1; sign <= 1; sign += 2) {{
+        var k = (row + dr*sign) + ',' + (col + dc);
+        if (pixelData.pixels[k]) {{ p = pixelData.pixels[k]; key = k; break outer; }}
+        k = (row + dc) + ',' + (col + dr*sign);
+        if (pixelData.pixels[k]) {{ p = pixelData.pixels[k]; key = k; break outer; }}
+      }}
+    }}
+  }}
   if (!p) return;
   var labelColor = LABEL_COLORS[p.label] || '#888';
   var rows = Object.keys(FEAT_LABELS).map(function(k) {{
