@@ -12,7 +12,7 @@ Daily satellite-based fall foliage tracker for the Massachusetts Appalachian Tra
 
 This project monitors ~15,000 30×30 m forest pixels along the Massachusetts AT using NASA Harmonized Landsat (HLS) imagery fetched daily from Google Earth Engine. For each pixel, a decreasing logistic curve is fitted to its multi-year EVI time series to estimate the day-of-year when fall foliage color change starts, peaks, and ends.
 
-A decision tree classifier trained on 10 years of labeled pixel-observations uses 11 features — current EVI and NDVI, their recent changes, day length, days relative to each pixel's historical average mid-transition date, the most common (mode) predicted label over the past 7 days, accumulated cold degree-days (CDD) since July 1, and the most recent daily mean temperature — to assign one of four phenological states: **Before**, **Early**, **Late**, or **After** (color change complete). CDD is computed as the sum of max(0, 5 − T_mean°C) for each day since July 1, using gridMET daily Tmax/Tmin at ~4 km resolution. The rolling label history and accumulated CDD are both committed to GitHub daily so each Action run can pick up where the last left off.
+A decision tree classifier trained on 10 years of labeled pixel-observations uses 11 features — current EVI and NDVI, their recent changes, day length, days relative to each pixel's historical average mid-transition date, the most common (mode) predicted label over the past 7 days, accumulated cold degree-days (CDD) since August 1, and the most recent daily mean temperature — to assign one of four phenological states: **Before**, **Early**, **Late**, or **After** (color change complete). CDD is computed as the sum of max(0, 5 − T_mean°C) for each day since August 1, using gridMET daily Tmax/Tmin at ~4 km resolution. The rolling label history and accumulated CDD are both committed to GitHub daily so each Action run can pick up where the last left off.
 
 Each morning the pipeline fetches new imagery, updates a rolling pixel state, reruns predictions across all forest pixels, and publishes results as a fully static Leaflet interactive map on GitHub Pages.
 
@@ -94,7 +94,7 @@ The daily Action reads these from the repo. They are produced by offline trainin
 | `greendown_{start,middle,end}_avg.tif` | Multi-year average transition-date rasters |
 | `greendown_avg_meta.json` | Grid metadata (dimensions, CRS, nodata) |
 | `pixel_state_{year}.npz` | Rolling 3-observation pixel state (updated daily by Action) |
-| `cdd_state_{year}.npz` | Accumulated cold degree-days since Jul 1 (updated daily by Action) |
+| `cdd_state_{year}.npz` | Accumulated cold degree-days since Aug 1 (updated daily by Action) |
 
 ---
 

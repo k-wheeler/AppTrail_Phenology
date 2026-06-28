@@ -2,7 +2,7 @@
 
 CDD accumulates daily heat deficit below 5°C using daily mean temperature:
     CDD_day = max(0, 5 − (Tmax + Tmin) / 2)
-Accumulation starts July 1 each year; CDD = 0 for any date before July 1.
+Accumulation starts August 1 each year; CDD = 0 for any date before August 1.
 
 Historical yearly CDD increments are stored locally as gridmet_cdd_{year}.npz.
 Current-year accumulated CDD is stored as cdd_state_{year}.npz and committed to GitHub.
@@ -18,8 +18,8 @@ CDD_THRESH_C = 5.0
 KELVIN_OFFSET = 273.15
 
 
-def _july1_doy(year):
-    return datetime.date(year, 7, 1).timetuple().tm_yday
+def _aug1_doy(year):
+    return datetime.date(year, 8, 1).timetuple().tm_yday
 
 
 def _doy_to_date(year, doy):
@@ -155,10 +155,10 @@ def fetch_gridmet_cdd_historical(year, route_buffer, output_dir):
         print(f'  gridMET CDD for {year} already cached at {out_path}')
         return out_path
 
-    print(f'  Downloading gridMET Tmax/Tmin for {year} (Jul 1 – Dec 31)...')
-    july1 = datetime.date(year, 7, 1)
+    print(f'  Downloading gridMET Tmax/Tmin for {year} (Aug 1 – Dec 31)...')
+    aug1  = datetime.date(year, 8, 1)
     dec31 = datetime.date(year, 12, 31)
-    result = _download_gridmet_range(july1, dec31, route_buffer, output_dir, str(year))
+    result = _download_gridmet_range(aug1, dec31, route_buffer, output_dir, str(year))
 
     if result is None:
         print(f'  No gridMET data available for {year}.')
@@ -211,16 +211,16 @@ def cdd_at_latlon(cdd_data, target_doy, year, lat_vals, lon_vals):
     Args:
         cdd_data: Dict from load_cdd_historical, or None.
         target_doy: Target day-of-year (1–365).
-        year: Calendar year (for July 1 threshold).
+        year: Calendar year (for August 1 threshold).
         lat_vals: 1D float array of WGS84 latitudes.
         lon_vals: 1D float array of WGS84 longitudes.
 
     Returns:
         1D float array of accumulated CDD values.
-        Returns 0 for dates before July 1; NaN if historical data not available.
+        Returns 0 for dates before August 1; NaN if historical data not available.
     """
     n = len(lat_vals)
-    if target_doy < _july1_doy(year):
+    if target_doy < _aug1_doy(year):
         return np.zeros(n)
     if cdd_data is None:
         return np.full(n, np.nan)
@@ -282,7 +282,7 @@ def update_cdd_state(year, route_buffer, output_dir):
     (DOY > last_doy), adds it to the accumulator, and saves back.  Running this
     multiple times per day is safe — only new dates are fetched.
 
-    Before July 1 the function returns immediately; CDD = 0 before accumulation starts.
+    Before August 1 the function returns immediately; CDD = 0 before accumulation starts.
 
     Args:
         year: Integer year.
@@ -290,19 +290,19 @@ def update_cdd_state(year, route_buffer, output_dir):
         output_dir: Directory to read/write cdd_state_{year}.npz.
 
     Returns:
-        Path to cdd_state_{year}.npz (file may not yet exist if before Jul 1).
+        Path to cdd_state_{year}.npz (file may not yet exist if before Aug 1).
     """
     state_path = os.path.join(output_dir, f'cdd_state_{year}.npz')
-    july1_doy  = _july1_doy(year)
+    aug1_doy   = _aug1_doy(year)
     today      = datetime.date.today()
     today_doy  = today.timetuple().tm_yday
 
-    if today_doy < july1_doy:
-        print(f'  Before Jul 1; CDD accumulation not yet started for {year}.')
+    if today_doy < aug1_doy:
+        print(f'  Before Aug 1; CDD accumulation not yet started for {year}.')
         return state_path
 
     # Load existing state (if any)
-    last_doy  = july1_doy - 1
+    last_doy  = aug1_doy - 1
     cdd_acc   = None
     tmean_last = None
     transform_arr = crs_wkt = None
@@ -324,7 +324,7 @@ def update_cdd_state(year, route_buffer, output_dir):
         print(f'  CDD state is current through DOY {last_doy}.')
         return state_path
 
-    start_date = _doy_to_date(year, max(july1_doy, last_doy + 1))
+    start_date = _doy_to_date(year, max(aug1_doy, last_doy + 1))
     end_date   = min(yesterday, datetime.date(year, 12, 31))
 
     print(f'  Downloading new gridMET data ({start_date} – {end_date})...')
@@ -405,10 +405,10 @@ def cdd_from_state(state_path, year, target_doy, lat_vals, lon_vals):
 
     Returns:
         1D float array of accumulated CDD values.
-        Returns 0 for dates before July 1 or if no state file exists yet.
+        Returns 0 for dates before August 1 or if no state file exists yet.
     """
     n = len(lat_vals)
-    if target_doy < _july1_doy(year):
+    if target_doy < _aug1_doy(year):
         return np.zeros(n)
     if not os.path.exists(state_path):
         return np.zeros(n)
