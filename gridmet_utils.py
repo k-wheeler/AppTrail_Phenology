@@ -296,11 +296,10 @@ def update_cdd_state(year, route_buffer, output_dir):
     state_path = os.path.join(output_dir, f'cdd_state_{year}.npz')
     aug1_doy   = _aug1_doy(year)
     today      = datetime.date.today()
+    today_doy  = today.timetuple().tm_yday
     yesterday  = today - datetime.timedelta(days=1)
     yesterday_doy = yesterday.timetuple().tm_yday
 
-    # Load existing state (if any); on first run fetch only yesterday to avoid
-    # pulling months of data.
     cdd_acc   = None
     tmean_last = None
     transform_arr = crs_wkt = None
@@ -315,7 +314,15 @@ def update_cdd_state(year, route_buffer, output_dir):
         crs_wkt       = str(state['crs_wkt'])
         print(f'  CDD state loaded: last_doy={last_doy}')
     else:
-        last_doy = yesterday_doy - 1
+        # First run: no state file yet. If we are already past Aug 1, start at
+        # Aug 1 so CDD accumulates the full season. Otherwise (CDD is 0) fetch a
+        # short recent window so the most recent T_mean is captured despite
+        # gridMET's 1–2 day publishing latency.
+        FIRST_RUN_LOOKBACK_DAYS = 5
+        if today_doy >= aug1_doy:
+            last_doy = aug1_doy - 1
+        else:
+            last_doy = yesterday_doy - FIRST_RUN_LOOKBACK_DAYS
 
     if last_doy >= yesterday_doy:
         print(f'  CDD state is current through DOY {last_doy}.')
