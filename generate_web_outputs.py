@@ -36,6 +36,7 @@ from map_utils import _pred_grid_to_rgba
 from fit_greendown_curves import update_pixel_state
 from identify_locations import identify_route_buffer, identify_forests, identify_maroute
 from predict_for_date import predict_from_pixel_state
+from gridmet_utils import update_cdd_state
 
 
 def _reproject_rgba_to_web(rgba, src_transform, src_crs):
@@ -421,14 +422,17 @@ window['map{phase}'].on('click', function(e) {{
       <li><strong>Greendown curves</strong> &mdash; A decreasing logistic curve is fitted to each
       pixel&rsquo;s EVI time series to estimate when foliage change starts, peaks, and ends,
       along with 95% confidence intervals.</li>
+      <li><strong>Temperature</strong> &mdash; Daily maximum and minimum air temperature
+      (gridMET, ~4 km) are used to compute accumulated cold degree-days (CDD) since
+      July 1: each day contributes max(0, 5&minus;T<sub>mean</sub>&deg;C). CDD
+      captures cumulative chilling that drives color change.</li>
       <li><strong>Machine learning</strong> &mdash; A decision tree classifier trained on 10 years
-      of labeled pixel-observations uses 9 features (EVI, NDVI, their recent changes, day length,
-      days relative to that pixel&rsquo;s historical average mid-transition date, and the most
-      common predicted label over the past 7 days) to assign one of four states: Before, Early,
-      Late, or After. The 7-day rolling history gives the model a temporal consistency signal
-      across successive predictions.</li>
-      <li><strong>Daily update</strong> &mdash; Each morning, new imagery is fetched, a rolling
-      window of the 3 most recent valid observations is updated, and predictions are recomputed
+      of labeled pixel-observations uses 10 features (EVI, NDVI, their recent changes, day length,
+      days relative to that pixel&rsquo;s historical average mid-transition date, the most
+      common predicted label over the past 7 days, and accumulated cold degree-days since
+      July 1) to assign one of four states: Before, Early, Late, or After.</li>
+      <li><strong>Daily update</strong> &mdash; Each morning, new imagery and temperature data
+      are fetched, rolling observation windows are updated, and predictions are recomputed
       for all ~15,000 forest pixels. Today&rsquo;s predictions are stored and used as part of
       tomorrow&rsquo;s feature set.</li>
     </ol>
@@ -445,6 +449,7 @@ window['map{phase}'].on('click', function(e) {{
     <h3>Data sources</h3>
     <ul>
       <li>Satellite imagery: NASA HLS HLSL30 v002 via Google Earth Engine</li>
+      <li>Daily temperature: gridMET (University of Idaho / Climatology Lab), ~4 km</li>
       <li>Forest pixels: NLCD 2021 (deciduous &amp; mixed forest classes)</li>
       <li>Trail corridor: 50 m buffer around the Massachusetts AT route</li>
       <li>Spatial grid: UTM Zone 18N (EPSG:32618), 30 m resolution</li>
@@ -483,7 +488,8 @@ var FEAT_LABELS = {{
   'ndvi_delta':           'NDVI Δ1 (vs prior obs)',
   'ndvi_delta2':          'NDVI Δ2 (vs 2nd prior obs)',
   'day_length_hrs':       'Day length (hrs)',
-  'doy_minus_avg_middle': 'Days from avg mid-transition'
+  'doy_minus_avg_middle': 'Days from avg mid-transition',
+  'cdd_accumulated':      'Cold degree-days (Jul 1→today)'
 }};
 var LABEL_COLORS = {json.dumps(LABEL_COLORS)};
 var LABEL_COLORS_HEX = {{
@@ -657,6 +663,10 @@ def main():
     print(f'\nUpdating pixel state for {year}...')
     state_path = update_pixel_state(collection, ma_forest, route_buffer,
                                     year, args.output_dir)
+
+    # Update accumulated CDD from gridMET (incremental; safe to rerun multiple times/day)
+    print(f'\nUpdating CDD state for {year}...')
+    update_cdd_state(year, route_buffer, args.output_dir)
 
     # If no satellite data exists yet for this season, write a placeholder
     if not os.path.exists(state_path):

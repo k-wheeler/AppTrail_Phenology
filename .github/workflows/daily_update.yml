@@ -38,7 +38,7 @@ jobs:
         run: |
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          git add greendown_outputs/pixel_state_*.npz greendown_outputs/hls_indices_ref_*.tif
+          git add greendown_outputs/pixel_state_*.npz greendown_outputs/hls_indices_ref_*.tif greendown_outputs/cdd_state_*.npz
           git diff --cached --quiet || git commit -m "chore: update pixel state $(date -u +%F)"
           git push
 

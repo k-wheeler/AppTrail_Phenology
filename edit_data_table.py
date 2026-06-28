@@ -122,6 +122,11 @@ def edit_feature_table(feature_df, output_dir):
     if 'mode_label_7day' in feature_df.columns:
         feature_df['mode_label_7day'] = feature_df['mode_label_7day'].fillna(0.0)
 
+    # Fill cdd_accumulated NaNs with 0: occurs for dates before Jul 1 or when
+    # gridMET data was not downloaded for a given training year.
+    if 'cdd_accumulated' in feature_df.columns:
+        feature_df['cdd_accumulated'] = feature_df['cdd_accumulated'].fillna(0.0)
+
     #These NaNs occur at the start of years where there aren't previous indices to compare to in the data set
     #Because these are not really needed (don't need to check for senescence at the very beginning of july) drop instead of gap fill
     feature_df = feature_df.dropna(subset=['evi_delta', 'evi_delta2', 'ndvi_delta', 'ndvi_delta2'])

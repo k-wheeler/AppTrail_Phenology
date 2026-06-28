@@ -11,6 +11,7 @@ from rasterio.transform import xy
 
 from filter_ci_widths import load_ci_widths
 from constants import NODATA, MAX_CI_WIDTH, CROSS_YEAR_MAX_CI_WIDTH
+from gridmet_utils import load_cdd_historical, cdd_at_latlon
 
 _LABEL_ENC = {'before': 0, 'early': 1, 'late': 2, 'after': 3}
 
@@ -85,10 +86,37 @@ def _load_point_estimates(output_dir, year):
     return points
 
 
+def _load_lat_lon_arrays(output_dir, year):
+    """Build 2D arrays of WGS84 latitudes and longitudes for every pixel.
+
+    Derives coordinates from the spatial transform and CRS of the reference GeoTIFF.
+
+    Args:
+        output_dir: Path to directory containing the reference GeoTIFF.
+        year: Integer year whose reference raster is used.
+
+    Returns:
+        Tuple (lat_array, lon_array), each shape (h, w), WGS84 decimal degrees.
+    """
+    ref_path = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
+    if not os.path.exists(ref_path):
+        ref_path = os.path.join(output_dir, 'hls_indices_ref_current.tif')
+    with rasterio.open(ref_path) as src:
+        h, w      = src.height, src.width
+        transform = src.transform
+        src_crs   = src.crs
+
+    rows_idx, cols_idx = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
+    xs, ys = xy(transform, rows_idx.ravel(), cols_idx.ravel())
+
+    transformer = Transformer.from_crs(src_crs, 'EPSG:4326', always_xy=True)
+    lons, lats = transformer.transform(xs, ys)
+
+    return np.array(lats).reshape(h, w), np.array(lons).reshape(h, w)
+
+
 def _load_lat_array(output_dir, year):
     """Build a 2D array of WGS84 latitudes for every pixel.
-
-    Derives latitudes from the spatial transform and CRS of the reference GeoTIFF.
 
     Args:
         output_dir: Path to directory containing the reference GeoTIFF.
@@ -97,21 +125,8 @@ def _load_lat_array(output_dir, year):
     Returns:
         Array of shape (h, w) with WGS84 latitude values.
     """
-    ref_path = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
-    if not os.path.exists(ref_path):
-        ref_path = os.path.join(output_dir, 'hls_indices_ref_current.tif')
-    with rasterio.open(ref_path) as src:
-        h, w       = src.height, src.width
-        transform  = src.transform
-        src_crs    = src.crs
-
-    rows_idx, cols_idx = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
-    xs, ys = xy(transform, rows_idx.ravel(), cols_idx.ravel())
-
-    transformer = Transformer.from_crs(src_crs, 'EPSG:4326', always_xy=True)
-    _, lats = transformer.transform(xs, ys)
-
-    return np.array(lats).reshape(h, w)
+    lat_array, _ = _load_lat_lon_arrays(output_dir, year)
+    return lat_array
 
 
 def _day_length(doy, lat_deg):
@@ -226,7 +241,8 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
         indices_stack = np.load(os.path.join(output_dir, f'hls_indices_stack_{year}.npy'))
         doys          = np.load(os.path.join(output_dir, f'hls_indices_doys_{year}.npy'))
         points        = _load_point_estimates(output_dir, year)
-        lat_array     = _load_lat_array(output_dir, year)
+        lat_array, lon_array = _load_lat_lon_arrays(output_dir, year)
+        cdd_hist      = load_cdd_historical(year, output_dir)
 
         pixel_rows, pixel_cols = np.where(mask)
         print(f'  {year}: {len(pixel_rows)} qualifying pixels')
@@ -237,7 +253,6 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
             start  = points['start'][r, c]
             middle = points['middle'][r, c]
             end    = points['end'][r, c]
-            lat    = lat_array[r, c]
 
             if not (np.isfinite(start) and np.isfinite(middle) and np.isfinite(end)):
                 continue
@@ -252,6 +267,8 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
                 ]
                 avg_doys[phase] = float(np.mean(vals)) if vals else float('nan')
 
+            lat = lat_array[r, c]
+            lon = lon_array[r, c]
             prev_evi   = None
             prev2_evi  = None
             prev_ndvi  = None
@@ -273,6 +290,8 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
                 prev2_ndvi  = prev_ndvi
                 prev_ndvi   = float(ndvi)
                 date = (datetime.date(year, 1, 1) + datetime.timedelta(days=int(doy) - 1)).isoformat()
+                cdd = float(cdd_at_latlon(cdd_hist, int(doy), year,
+                                          np.array([lat]), np.array([lon]))[0])
                 rows.append({
                     'year':                      year,
                     'date':                      date,
@@ -288,6 +307,7 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
                     'doy_minus_avg_start':  int(doy) - avg_doys['start'],
                     'doy_minus_avg_middle': int(doy) - avg_doys['middle'],
                     'doy_minus_avg_end':    int(doy) - avg_doys['end'],
+                    'cdd_accumulated':           cdd,
                     'label':                     _assign_label(doy, start, middle, end),
                 })
 
@@ -296,7 +316,7 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
         'evi_delta', 'evi_delta2', 'ndvi_delta', 'ndvi_delta2',
         'day_length_hrs',
         'doy_minus_avg_start', 'doy_minus_avg_middle', 'doy_minus_avg_end',
-        'label',
+        'cdd_accumulated', 'label',
     ])
     print(f'\nTotal labeled phenology observations: {len(df)}')
     df = _add_mode_label_7day(df)

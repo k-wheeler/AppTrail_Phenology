@@ -44,6 +44,7 @@ def simple_feature_df():
         'day_length_hrs':      rng.uniform(9.0, 15.0, n),
         'doy_minus_avg_middle': rng.uniform(-30, 30, n),
         'mode_label_7day':     rng.integers(0, 4, n).astype(float),
+        'cdd_accumulated':     rng.uniform(0, 200, n),
         'label':               labels,
     })
     return df
@@ -66,6 +67,7 @@ def imbalanced_feature_df():
             'day_length_hrs':      rng.uniform(9.0, 15.0, n),
             'doy_minus_avg_middle': rng.uniform(-30, 30, n),
             'mode_label_7day':     rng.integers(0, 4, n).astype(float),
+            'cdd_accumulated':     rng.uniform(0, 200, n),
             'label':               label,
         })
         frames.append(frame)

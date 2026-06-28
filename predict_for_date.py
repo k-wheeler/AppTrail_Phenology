@@ -7,17 +7,18 @@ import numpy as np
 import rasterio
 
 from build_data_table import (
-    _load_lat_array,
+    _load_lat_lon_arrays,
     _day_length,
     _build_cross_year_transition_lookup,
 )
 from edit_data_table import _compute_global_avg_middle
+from gridmet_utils import cdd_from_state
 from constants import NODATA
 
 PRED_YEAR = datetime.date.today().year
 FEATURE_COLS = ['EVI', 'NDVI', 'evi_delta', 'evi_delta2',
                 'ndvi_delta', 'ndvi_delta2', 'day_length_hrs', 'doy_minus_avg_middle',
-                'mode_label_7day']
+                'mode_label_7day', 'cdd_accumulated']
 
 
 def _compute_mode_7day(recent_labels, r, c):
@@ -158,8 +159,7 @@ def predict_phenology(date_str, output_dir):
         transform = src.transform
         crs       = src.crs
 
-    # Latitude array for day-length calculation
-    lat_array = _load_lat_array(output_dir, PRED_YEAR)
+    lat_array, lon_array = _load_lat_lon_arrays(output_dir, PRED_YEAR)
 
     # Cross-year middle transition DOY lookup (excludes 2025 automatically)
     cross_year_lookup = _build_cross_year_transition_lookup(output_dir)
@@ -233,6 +233,10 @@ def predict_phenology(date_str, output_dir):
     X[:, 7] = doy_minus
     # No rolling label history in the full-stack path; nan_to_num fills to normalized mean
     X[:, 8] = np.nan
+    # CDD from current-year state file if available, else nan (imputed to mean at normalize step)
+    cdd_state_path = os.path.join(output_dir, f'cdd_state_{PRED_YEAR}.npz')
+    X[:, 9] = cdd_from_state(cdd_state_path, PRED_YEAR, target_doy,
+                              lat_array[r, c], lon_array[r, c])
 
     # Z-score normalization using saved training statistics
     for j, col in enumerate(FEATURE_COLS):
@@ -310,7 +314,7 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
         transform = src.transform
         crs       = src.crs
 
-    lat_array = _load_lat_array(output_dir, year)
+    lat_array, lon_array = _load_lat_lon_arrays(output_dir, year)
     cross_year_lookup = _build_cross_year_transition_lookup(output_dir)
     global_avg_middle = _load_global_avg_middle(output_dir)
 
@@ -344,6 +348,11 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
                              target_doy - global_avg_middle, doy_minus)
     X[:, 7] = doy_minus
     X[:, 8] = _compute_mode_7day(recent_labels, r, c)
+
+    # cdd_accumulated: look up from current-year state file (committed to GitHub)
+    cdd_state_path = os.path.join(output_dir, f'cdd_state_{year}.npz')
+    X[:, 9] = cdd_from_state(cdd_state_path, year, target_doy,
+                              lat_array[r, c], lon_array[r, c])
 
     # Capture raw (pre-normalization) feature values for the popup JSON
     X_raw = X.copy()
