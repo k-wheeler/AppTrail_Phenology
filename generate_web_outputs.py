@@ -327,6 +327,9 @@ window['map{phase}'].on('click', function(e) {{
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>AT Phenology — Massachusetts</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -476,7 +479,7 @@ function showTab(name, el) {{
 var mapToday = L.map('map-today').setView({center}, 10);
 L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',
     {{attribution: '&copy; OpenStreetMap contributors &copy; CARTO'}}).addTo(mapToday);
-L.imageOverlay('current_pred.png', {bounds}, {{opacity: 1.0}}).addTo(mapToday);
+L.imageOverlay('current_pred.png?v={date_str}', {bounds}, {{opacity: 1.0}}).addTo(mapToday);
 
 // Pixel-click popup: each pixel stores its WGS84 centre lat/lon so lookup
 // is a simple nearest-neighbour search — no coordinate transform needed.
@@ -596,7 +599,11 @@ def _render_placeholder_html(web_dir,
     """
     html = f'''<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>AT Phenology</title>
+<head><meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>AT Phenology</title>
 <style>body{{font-family:sans-serif;text-align:center;padding:60px;color:#444;}}
 h1{{color:#2c6b3f;}}</style></head>
 <body>
