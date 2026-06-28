@@ -17,6 +17,12 @@ from rasterio.transform import Affine
 CDD_THRESH_C = 5.0
 KELVIN_OFFSET = 273.15
 
+# Historical gridMET is fetched from this date through Dec 31 so that every
+# training observation (and its previous day) has a real daily mean temperature.
+# CDD still only accumulates from Aug 1; earlier increments are zeroed.
+HIST_FETCH_START_MONTH = 5
+HIST_FETCH_START_DAY   = 25
+
 
 def _aug1_doy(year):
     return datetime.date(year, 8, 1).timetuple().tm_yday
@@ -134,13 +140,27 @@ def _download_gridmet_range(start_date, end_date, route_buffer, output_dir, tag)
 # Public API — training (historical)
 # ---------------------------------------------------------------------------
 
+def _cdd_from_result(result, aug1_doy):
+    """Daily CDD increments from a download result, zeroed before Aug 1."""
+    cdd_daily = _compute_cdd_increments(result['tmmn_stack'], result['tmmx_stack'])
+    cdd_daily[result['doys'] < aug1_doy] = 0.0
+    return cdd_daily
+
+
 def fetch_gridmet_cdd_historical(year, route_buffer, output_dir):
     """Download gridMET for a full historical season and save daily CDD increments.
 
     Stores greendown_outputs/gridmet_cdd_{year}.npz with keys:
-        doys (n,), cdd_daily (n, h, w) float32, transform (6,), crs_wkt str.
+        doys (n,), cdd_daily (n, h, w) float32, tmean_daily (n, h, w) float32,
+        transform (6,), crs_wkt str.
 
-    Skips download if the file already exists.
+    Data is fetched from HIST_FETCH_START_MONTH/DAY through Dec 31 so that every
+    training observation has a real previous-day temperature.  CDD increments
+    before Aug 1 are zeroed, so accumulated CDD still starts at Aug 1.
+
+    If a cached file exists but does not cover the full early window (e.g. an
+    older Aug 1-only download), only the missing early gap is fetched and merged
+    with the cached data — the cached Aug–Dec days are not re-downloaded.
 
     Args:
         year: Integer year.
@@ -150,31 +170,65 @@ def fetch_gridmet_cdd_historical(year, route_buffer, output_dir):
     Returns:
         Path to the .npz file, or None if no data is available.
     """
-    out_path = os.path.join(output_dir, f'gridmet_cdd_{year}.npz')
+    out_path  = os.path.join(output_dir, f'gridmet_cdd_{year}.npz')
+    aug1_doy  = _aug1_doy(year)
+    start     = datetime.date(year, HIST_FETCH_START_MONTH, HIST_FETCH_START_DAY)
+    start_doy = start.timetuple().tm_yday
+    dec31     = datetime.date(year, 12, 31)
+
+    cached = None
     if os.path.exists(out_path):
-        print(f'  gridMET CDD for {year} already cached at {out_path}')
-        return out_path
+        c = np.load(out_path, allow_pickle=True)
+        full_coverage = ('tmean_daily' in c.files
+                         and int(c['doys'].min()) <= start_doy)
+        if full_coverage:
+            print(f'  gridMET CDD for {year} already cached at {out_path}')
+            return out_path
+        if 'tmean_daily' in c.files and 'cdd_daily' in c.files:
+            cached = c  # partial (likely Aug 1-only); extend the early gap below
 
-    print(f'  Downloading gridMET Tmax/Tmin for {year} (Aug 1 – Dec 31)...')
-    aug1  = datetime.date(year, 8, 1)
-    dec31 = datetime.date(year, 12, 31)
-    result = _download_gridmet_range(aug1, dec31, route_buffer, output_dir, str(year))
+    if cached is not None:
+        gap_end = _doy_to_date(year, int(cached['doys'].min()) - 1)
+        print(f'  Extending {year} gridMET coverage ({start} – {gap_end})...')
+        result = _download_gridmet_range(start, gap_end, route_buffer, output_dir, str(year))
+        if result is None:
+            print(f'  No earlier gridMET data available for {year}; keeping cache.')
+            return out_path
 
-    if result is None:
-        print(f'  No gridMET data available for {year}.')
-        return None
+        new_cdd   = _cdd_from_result(result, aug1_doy)
+        new_tmean = _compute_tmean_c(result['tmmn_stack'], result['tmmx_stack'])
+        cached_cdd, cached_tmean = cached['cdd_daily'], cached['tmean_daily']
+        if new_cdd.shape[1:] != cached_cdd.shape[1:]:
+            print('  Grid mismatch between gap and cache; re-downloading full year.')
+            cached = None
+        else:
+            doys        = np.concatenate([result['doys'], cached['doys']])
+            cdd_daily   = np.concatenate([new_cdd,   cached_cdd],   axis=0)
+            tmean_daily = np.concatenate([new_tmean, cached_tmean], axis=0)
+            transform   = cached['transform']
+            crs_wkt     = str(cached['crs_wkt'])
 
-    cdd_daily  = _compute_cdd_increments(result['tmmn_stack'], result['tmmx_stack'])
-    tmean_daily = _compute_tmean_c(result['tmmn_stack'], result['tmmx_stack'])
+    if cached is None:
+        print(f'  Downloading gridMET Tmax/Tmin for {year} ({start} – Dec 31)...')
+        result = _download_gridmet_range(start, dec31, route_buffer, output_dir, str(year))
+        if result is None:
+            print(f'  No gridMET data available for {year}.')
+            return None
+        doys        = result['doys']
+        cdd_daily   = _cdd_from_result(result, aug1_doy)
+        tmean_daily = _compute_tmean_c(result['tmmn_stack'], result['tmmx_stack'])
+        transform   = result['transform']
+        crs_wkt     = str(result['crs_wkt'])
+
     np.savez_compressed(
         out_path,
-        doys=result['doys'],
+        doys=doys.astype(np.int32),
         cdd_daily=cdd_daily.astype(np.float32),
         tmean_daily=tmean_daily.astype(np.float32),
-        transform=result['transform'],
-        crs_wkt=np.array(str(result['crs_wkt'])),
+        transform=transform,
+        crs_wkt=np.array(str(crs_wkt)),
     )
-    print(f'  Saved {out_path} ({len(result["doys"])} days)')
+    print(f'  Saved {out_path} ({len(doys)} days)')
     return out_path
 
 

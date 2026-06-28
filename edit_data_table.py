@@ -122,17 +122,23 @@ def edit_feature_table(feature_df, output_dir):
     if 'mode_label_7day' in feature_df.columns:
         feature_df['mode_label_7day'] = feature_df['mode_label_7day'].fillna(0.0)
 
-    # Fill cdd_accumulated NaNs with 0: occurs for dates before Jul 1 or when
+    # Fill cdd_accumulated NaNs with 0: occurs for dates before Aug 1 or when
     # gridMET data was not downloaded for a given training year.
     if 'cdd_accumulated' in feature_df.columns:
         feature_df['cdd_accumulated'] = feature_df['cdd_accumulated'].fillna(0.0)
 
-    # Fill tmean_recent NaNs with column mean: temperature can be negative so 0
-    # is not a safe default; mean is a neutral imputation before z-scoring.
+    # tmean_recent should be a real previous-day temperature for every row now
+    # that historical gridMET spans the full observation window. Any residual
+    # NaN is a rare gridMET grid-edge cell; fill with the column mean (temperature
+    # can be negative, so 0 is not a safe default) and report the count.
     if 'tmean_recent' in feature_df.columns:
-        feature_df['tmean_recent'] = feature_df['tmean_recent'].fillna(
-            feature_df['tmean_recent'].mean()
-        )
+        n_missing = int(feature_df['tmean_recent'].isna().sum())
+        if n_missing:
+            print(f'  Filling {n_missing} NaN tmean_recent values with column mean '
+                  f'({100 * n_missing / len(feature_df):.2f}% of rows)')
+            feature_df['tmean_recent'] = feature_df['tmean_recent'].fillna(
+                feature_df['tmean_recent'].mean()
+            )
 
     #These NaNs occur at the start of years where there aren't previous indices to compare to in the data set
     #Because these are not really needed (don't need to check for senescence at the very beginning of july) drop instead of gap fill
