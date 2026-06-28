@@ -290,9 +290,13 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
                 prev2_ndvi  = prev_ndvi
                 prev_ndvi   = float(ndvi)
                 date = (datetime.date(year, 1, 1) + datetime.timedelta(days=int(doy) - 1)).isoformat()
-                cdd   = float(cdd_at_latlon(cdd_hist, int(doy), year,
+                # Sample CDD and daily mean temperature for the PREVIOUS day
+                # (doy - 1) to match serving, where the most recent available
+                # gridMET reading lags the prediction date by ~1-2 days.
+                prev_doy = int(doy) - 1
+                cdd   = float(cdd_at_latlon(cdd_hist, prev_doy, year,
                                             np.array([lat]), np.array([lon]))[0])
-                tmean = float(tmean_at_latlon(cdd_hist, int(doy),
+                tmean = float(tmean_at_latlon(cdd_hist, prev_doy,
                                               np.array([lat]), np.array([lon]))[0])
                 rows.append({
                     'year':                      year,
