@@ -140,9 +140,11 @@ def edit_feature_table(feature_df, output_dir):
                 feature_df['tmean_recent'].mean()
             )
 
-    #These NaNs occur at the start of years where there aren't previous indices to compare to in the data set
-    #Because these are not really needed (don't need to check for senescence at the very beginning of july) drop instead of gap fill
-    feature_df = feature_df.dropna(subset=['evi_delta', 'evi_delta2', 'ndvi_delta', 'ndvi_delta2'])
+    # Delta NaNs occur at the start of a pixel's series (no prior observation to
+    # difference against). Rather than dropping these rows, keep them and fill the
+    # NaNs with normalized 0 after z-scoring (below) — this mirrors serving, which
+    # feeds delta=normalized-0 for pixels with too few prior observations
+    # (predict_for_date: X = np.where(np.isnan(X), 0.0, X)).
 
     #Remove columns not needed for models
     feature_df = feature_df.drop(columns=['doy', 'doy_minus_avg_start', 'doy_minus_avg_end', 'year', 'date'])
@@ -153,11 +155,15 @@ def edit_feature_table(feature_df, output_dir):
     labels = feature_df['label']
     feature_df = _balance_classes(feature_df)
 
-    #Z-score normalize each column separately
+    #Z-score normalize each column separately. mean()/std() skip NaN deltas, so
+    #the saved stats are unaffected by them; serving applies these same stats.
     numeric_cols = feature_df.select_dtypes(include='number').columns
     col_means = feature_df[numeric_cols].mean()
     col_stds  = feature_df[numeric_cols].std()
     feature_df[numeric_cols] = (feature_df[numeric_cols] - col_means) / col_stds
+    # Fill any remaining NaN (the start-of-series deltas) with normalized 0,
+    # exactly as serving does after applying norm_stats.
+    feature_df[numeric_cols] = feature_df[numeric_cols].fillna(0.0)
     feature_df['label'] = labels.loc[feature_df.index]
 
     # Save normalization statistics so prediction code can apply the same scaling
