@@ -21,23 +21,40 @@ FEATURE_COLS = ['EVI', 'NDVI', 'evi_delta', 'evi_delta2',
                 'mode_label_7day', 'cdd_accumulated', 'tmean_recent']
 
 
-def _compute_mode_7day(recent_labels, r, c):
-    """Compute ordinal mode of the 7-day rolling label history per forest pixel.
+def _compute_mode_7day(recent_labels, recent_label_doys, doy0, r, c):
+    """Compute the ordinal mode of recent labels in the [doy0-7, doy0-1] window.
+
+    Mirrors the training-time feature (build_data_table._add_mode_label_7day):
+    for the pixel's most recent observation at DOY doy0, take the ordinal mode of
+    the labels of that pixel's prior observations whose DOY falls within the 7-day
+    window strictly before doy0. The label history is keyed by observation DOY
+    (not by Action run), so only days with a real satellite observation count and
+    days without new imagery are not double-counted.
 
     Args:
-        recent_labels: (h, w, 7) int8 array; -1 = no prediction yet,
-            0=before, 1=early, 2=late, 3=after.
+        recent_labels: (h, w, 7) int8 array; -1 = empty slot,
+            0=before, 1=early, 2=late, 3=after. Slot 0 = most recent observation.
+        recent_label_doys: (h, w, 7) int16 array of the observation DOY for each
+            label slot; -1 = empty.
+        doy0: (h, w) float array of each pixel's most recent observation DOY.
         r, c: Row and column index arrays for forest pixels (length n_px).
 
     Returns:
         1D float array of length n_px with mode values (0.0–3.0), or 0.0
-        (before) where no history exists.
+        (before) where no prior observation exists in the window.
     """
-    rl = recent_labels[r, c, :]      # (n_px, 7)
+    rl  = recent_labels[r, c, :]        # (n_px, 7)
+    rld = recent_label_doys[r, c, :]    # (n_px, 7)
+    d0  = doy0[r, c]                     # (n_px,)
     mode_vals = np.zeros(len(r))
     for i in range(len(r)):
-        v = rl[i]
-        v = v[v >= 0]
+        di = d0[i]
+        if not np.isfinite(di):
+            continue
+        labels = rl[i]
+        doys   = rld[i]
+        window = (labels >= 0) & (doys >= di - 7) & (doys <= di - 1)
+        v = labels[window]
         if len(v) > 0:
             counts = np.bincount(v.astype(np.intp), minlength=4)
             mode_vals[i] = float(np.argmax(counts))
@@ -299,9 +316,18 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
     ndvi_1 = state['ndvi_1'].astype(float)
     ndvi_2 = state['ndvi_2'].astype(float)
     h, w = evi_0.shape
+    doy_0 = (state['doy_0'].astype(float)
+             if 'doy_0' in state.files
+             else np.full((h, w), np.nan))
     recent_labels = (state['recent_labels']
                      if 'recent_labels' in state.files
                      else np.full((h, w, 7), -1, dtype=np.int8))
+    # Observation DOY for each label slot; absent on legacy (run-indexed) states,
+    # in which case the empty (-1) DOYs make the window exclude all old labels and
+    # the history rebuilds, observation by observation, with the new semantics.
+    recent_label_doys = (state['recent_label_doys']
+                         if 'recent_label_doys' in state.files
+                         else np.full((h, w, 7), -1, dtype=np.int16))
 
     mdl = joblib.load(os.path.join(output_dir, 'decision_tree_model.joblib'))
     with open(os.path.join(output_dir, 'norm_stats.json')) as f:
@@ -348,7 +374,7 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
         doy_minus = np.where(np.isnan(doy_minus),
                              target_doy - global_avg_middle, doy_minus)
     X[:, 7] = doy_minus
-    X[:, 8] = _compute_mode_7day(recent_labels, r, c)
+    X[:, 8] = _compute_mode_7day(recent_labels, recent_label_doys, doy_0, r, c)
 
     # cdd_accumulated and tmean_recent: look up from current-year state file
     cdd_state_path = os.path.join(output_dir, f'cdd_state_{year}.npz')

@@ -546,7 +546,7 @@ mapToday.on('click', function(e) {{
   var html = '<div style="font-size:13px;min-width:230px">' +
     '<b>Predicted: <span style="color:' + labelColor + '">' +
     p.label.charAt(0).toUpperCase() + p.label.slice(1) + '</span></b>' +
-    '<div style="margin-top:6px;font-size:11px;color:#777">7-day history (newest → oldest)</div>' +
+    '<div style="margin-top:6px;font-size:11px;color:#777">Recent observations (newest → oldest)</div>' +
     '<div style="margin-bottom:6px;font-size:12px">' + histChips + '</div>' +
     '<table style="width:100%;border-collapse:collapse">' +
     rows + '</table>' +
@@ -691,8 +691,12 @@ def main():
         state_path, today_str, args.output_dir, return_features=True
     )
 
-    # Shift the 7-day rolling label history and save today's prediction into the
-    # pixel state so the mode_label_7day feature is current for tomorrow's run.
+    # Record today's prediction into the per-observation rolling label history,
+    # keyed by observation DOY so mode_label_7day mirrors training: a label is
+    # stored for a pixel only when a new satellite observation has arrived (doy_0
+    # advanced), and the feature takes the mode over the [doy-7, doy-1] observation
+    # window. Re-running on a day with no new imagery refreshes the current
+    # observation's label rather than appending a duplicate entry.
     _label_enc = {'before': 0, 'early': 1, 'late': 2, 'after': 3}
     _label_dec = {-1: None, 0: 'before', 1: 'early', 2: 'late', 3: 'after'}
     _label_int = np.full(pred_grid.shape, -1, dtype=np.int8)
@@ -701,14 +705,33 @@ def main():
     with np.load(state_path) as _sd:
         _state_dict = {k: _sd[k].copy() for k in _sd.files}
     _h, _w = _state_dict['evi_0'].shape
-    _rl = _state_dict.get('recent_labels', np.full((_h, _w, 7), -1, dtype=np.int8))
-    # Capture pre-shift labels for popup display (these are the 7 prior-day predictions)
-    _rl_prev = _rl.copy()
-    _rl[:, :, 1:] = _rl[:, :, :6]
-    _rl[:, :, 0] = _label_int
-    _state_dict['recent_labels'] = _rl
+
+    _rl  = _state_dict.get('recent_labels')
+    _rld = _state_dict.get('recent_label_doys')
+    if _rl is None or _rld is None:        # legacy/first run: start history fresh
+        _rl  = np.full((_h, _w, 7), -1, dtype=np.int8)
+        _rld = np.full((_h, _w, 7), -1, dtype=np.int16)
+
+    _d0 = _state_dict.get('doy_0', np.full((_h, _w), np.nan)).astype(float)
+    _has_obs   = np.isfinite(_d0)
+    _d0_int    = np.where(_has_obs, _d0, -1).astype(np.int16)
+    _slot0_doy = _rld[:, :, 0]
+    _is_new  = _has_obs & (_d0_int != _slot0_doy)   # a new observation arrived
+    _is_same = _has_obs & (_d0_int == _slot0_doy)   # same observation as last record
+
+    # Shift older entries back one slot, but only where a new observation arrived.
+    for _s in range(6, 0, -1):
+        _rl[:, :, _s]  = np.where(_is_new, _rl[:, :, _s - 1],  _rl[:, :, _s])
+        _rld[:, :, _s] = np.where(_is_new, _rld[:, :, _s - 1], _rld[:, :, _s])
+    _rl[:, :, 0]  = np.where(_is_new, _label_int, _rl[:, :, 0])
+    _rld[:, :, 0] = np.where(_is_new, _d0_int,    _rld[:, :, 0])
+    # Where no new observation arrived, refresh the current observation's label.
+    _rl[:, :, 0]  = np.where(_is_same, _label_int, _rl[:, :, 0])
+
+    _state_dict['recent_labels']     = _rl
+    _state_dict['recent_label_doys'] = _rld
     np.savez_compressed(state_path, **_state_dict)
-    print('  Updated recent_labels in pixel state.')
+    print('  Updated observation-keyed recent_labels in pixel state.')
 
     # Save prediction PNG, warped to Web Mercator so it aligns with the basemap.
     # bounds comes from the warped raster and is reused for all overlays.
@@ -775,7 +798,7 @@ def main():
                 entry[f'avg_{_phase}_doy'] = None if np.isnan(v) else round(v, 1)
             else:
                 entry[f'avg_{_phase}_doy'] = None
-        entry['recent_labels'] = [_label_dec[int(_rl_prev[ri, ci, j])] for j in range(7)]
+        entry['recent_labels'] = [_label_dec[int(_rl[ri, ci, j])] for j in range(7)]
         pixels.append(entry)
     pixel_json = {
         'pixels': pixels,

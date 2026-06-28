@@ -402,8 +402,13 @@ def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
         state = dict(np.load(state_path))
         h, w = state['evi_0'].shape
         existing_doys = set(int(d) for d in state.get('seen_doys', []))
-        if 'recent_labels' not in state:
-            state['recent_labels'] = np.full((h, w, 7), -1, dtype=np.int8)
+        # recent_labels/recent_label_doys hold the per-observation predicted-label
+        # history keyed by observation DOY (see generate_web_outputs). A legacy
+        # state may have run-indexed recent_labels and no DOYs; reset both so the
+        # history rebuilds cleanly under the observation-keyed semantics.
+        if 'recent_labels' not in state or 'recent_label_doys' not in state:
+            state['recent_labels']     = np.full((h, w, 7), -1, dtype=np.int8)
+            state['recent_label_doys'] = np.full((h, w, 7), -1, dtype=np.int16)
         print(f'  Loaded existing pixel state ({len(existing_doys)} DOYs already processed)')
 
     # Fetch all image timestamps from GEE and filter to ones not yet processed
@@ -450,7 +455,8 @@ def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
                     'evi_0':  nan_hw.copy(), 'evi_1':  nan_hw.copy(), 'evi_2':  nan_hw.copy(),
                     'ndvi_0': nan_hw.copy(), 'ndvi_1': nan_hw.copy(), 'ndvi_2': nan_hw.copy(),
                     'doy_0':  nan_hw.copy(), 'doy_1':  nan_hw.copy(), 'doy_2':  nan_hw.copy(),
-                    'recent_labels': np.full((h, w, 7), -1, dtype=np.int8),
+                    'recent_labels':     np.full((h, w, 7), -1, dtype=np.int8),
+                    'recent_label_doys': np.full((h, w, 7), -1, dtype=np.int16),
                 }
 
             # Write reference rasters if not already saved
