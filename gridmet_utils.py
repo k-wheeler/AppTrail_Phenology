@@ -282,7 +282,8 @@ def update_cdd_state(year, route_buffer, output_dir):
     (DOY > last_doy), adds it to the accumulator, and saves back.  Running this
     multiple times per day is safe — only new dates are fetched.
 
-    Before August 1 the function returns immediately; CDD = 0 before accumulation starts.
+    CDD accumulation only starts August 1; before that, CDD stays 0 but tmean_last
+    is still updated daily so recent temperature is always available for predictions.
 
     Args:
         year: Integer year.
@@ -290,19 +291,16 @@ def update_cdd_state(year, route_buffer, output_dir):
         output_dir: Directory to read/write cdd_state_{year}.npz.
 
     Returns:
-        Path to cdd_state_{year}.npz (file may not yet exist if before Aug 1).
+        Path to cdd_state_{year}.npz.
     """
     state_path = os.path.join(output_dir, f'cdd_state_{year}.npz')
     aug1_doy   = _aug1_doy(year)
     today      = datetime.date.today()
-    today_doy  = today.timetuple().tm_yday
+    yesterday  = today - datetime.timedelta(days=1)
+    yesterday_doy = yesterday.timetuple().tm_yday
 
-    if today_doy < aug1_doy:
-        print(f'  Before Aug 1; CDD accumulation not yet started for {year}.')
-        return state_path
-
-    # Load existing state (if any)
-    last_doy  = aug1_doy - 1
+    # Load existing state (if any); on first run fetch only yesterday to avoid
+    # pulling months of data.
     cdd_acc   = None
     tmean_last = None
     transform_arr = crs_wkt = None
@@ -316,15 +314,14 @@ def update_cdd_state(year, route_buffer, output_dir):
         transform_arr = state['transform'].copy()
         crs_wkt       = str(state['crs_wkt'])
         print(f'  CDD state loaded: last_doy={last_doy}')
-
-    yesterday     = today - datetime.timedelta(days=1)
-    yesterday_doy = yesterday.timetuple().tm_yday
+    else:
+        last_doy = yesterday_doy - 1
 
     if last_doy >= yesterday_doy:
         print(f'  CDD state is current through DOY {last_doy}.')
         return state_path
 
-    start_date = _doy_to_date(year, max(aug1_doy, last_doy + 1))
+    start_date = _doy_to_date(year, last_doy + 1)
     end_date   = min(yesterday, datetime.date(year, 12, 31))
 
     print(f'  Downloading new gridMET data ({start_date} – {end_date})...')
@@ -343,10 +340,13 @@ def update_cdd_state(year, route_buffer, output_dir):
     cdd_increments  = _compute_cdd_increments(result['tmmn_stack'], result['tmmx_stack'])
     tmean_stack     = _compute_tmean_c(result['tmmn_stack'], result['tmmx_stack'])
     for i, doy in enumerate(result['doys']):
-        cdd_acc   += cdd_increments[i]
-        tmean_last = tmean_stack[i]   # keep only the most recent day's T_mean
+        if doy >= aug1_doy:
+            cdd_acc += cdd_increments[i]
+            print(f'    Accumulated CDD for DOY {doy}')
+        else:
+            print(f'    Stored T_mean for DOY {doy} (before Aug 1; CDD not accumulated)')
+        tmean_last = tmean_stack[i]   # always keep the most recent day's T_mean
         last_doy   = max(last_doy, int(doy))
-        print(f'    Accumulated CDD for DOY {doy}')
 
     np.savez_compressed(
         state_path,
