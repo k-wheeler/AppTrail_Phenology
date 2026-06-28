@@ -11,7 +11,7 @@ from rasterio.transform import xy
 
 from filter_ci_widths import load_ci_widths
 from constants import NODATA, MAX_CI_WIDTH, CROSS_YEAR_MAX_CI_WIDTH
-from gridmet_utils import load_cdd_historical, cdd_at_latlon
+from gridmet_utils import load_cdd_historical, cdd_at_latlon, tmean_at_latlon
 
 _LABEL_ENC = {'before': 0, 'early': 1, 'late': 2, 'after': 3}
 
@@ -290,8 +290,10 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
                 prev2_ndvi  = prev_ndvi
                 prev_ndvi   = float(ndvi)
                 date = (datetime.date(year, 1, 1) + datetime.timedelta(days=int(doy) - 1)).isoformat()
-                cdd = float(cdd_at_latlon(cdd_hist, int(doy), year,
-                                          np.array([lat]), np.array([lon]))[0])
+                cdd   = float(cdd_at_latlon(cdd_hist, int(doy), year,
+                                            np.array([lat]), np.array([lon]))[0])
+                tmean = float(tmean_at_latlon(cdd_hist, int(doy),
+                                              np.array([lat]), np.array([lon]))[0])
                 rows.append({
                     'year':                      year,
                     'date':                      date,
@@ -308,6 +310,7 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
                     'doy_minus_avg_middle': int(doy) - avg_doys['middle'],
                     'doy_minus_avg_end':    int(doy) - avg_doys['end'],
                     'cdd_accumulated':           cdd,
+                    'tmean_recent':              tmean,
                     'label':                     _assign_label(doy, start, middle, end),
                 })
 
@@ -316,7 +319,7 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
         'evi_delta', 'evi_delta2', 'ndvi_delta', 'ndvi_delta2',
         'day_length_hrs',
         'doy_minus_avg_start', 'doy_minus_avg_middle', 'doy_minus_avg_end',
-        'cdd_accumulated', 'label',
+        'cdd_accumulated', 'tmean_recent', 'label',
     ])
     print(f'\nTotal labeled phenology observations: {len(df)}')
     df = _add_mode_label_7day(df)

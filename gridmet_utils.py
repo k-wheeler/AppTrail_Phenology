@@ -31,6 +31,11 @@ def _parse_transform(transform_arr):
                   transform_arr[3], transform_arr[4], transform_arr[5])
 
 
+def _compute_tmean_c(tmmn_k, tmmx_k):
+    """Daily mean temperature in °C from Kelvin min/max arrays."""
+    return (tmmn_k + tmmx_k) / 2.0 - KELVIN_OFFSET
+
+
 def _compute_cdd_increments(tmmn_k, tmmx_k):
     """Daily CDD increment: max(0, 5 − (Tmax + Tmin)/2) in Celsius.
 
@@ -41,7 +46,7 @@ def _compute_cdd_increments(tmmn_k, tmmx_k):
     Returns:
         Array of non-negative CDD increments (same shape as inputs).
     """
-    tmean_c = (tmmn_k + tmmx_k) / 2.0 - KELVIN_OFFSET
+    tmean_c = _compute_tmean_c(tmmn_k, tmmx_k)
     return np.where(np.isfinite(tmean_c), np.maximum(0.0, CDD_THRESH_C - tmean_c), 0.0)
 
 
@@ -159,11 +164,13 @@ def fetch_gridmet_cdd_historical(year, route_buffer, output_dir):
         print(f'  No gridMET data available for {year}.')
         return None
 
-    cdd_daily = _compute_cdd_increments(result['tmmn_stack'], result['tmmx_stack'])
+    cdd_daily  = _compute_cdd_increments(result['tmmn_stack'], result['tmmx_stack'])
+    tmean_daily = _compute_tmean_c(result['tmmn_stack'], result['tmmx_stack'])
     np.savez_compressed(
         out_path,
         doys=result['doys'],
         cdd_daily=cdd_daily.astype(np.float32),
+        tmean_daily=tmean_daily.astype(np.float32),
         transform=result['transform'],
         crs_wkt=np.array(str(result['crs_wkt'])),
     )
@@ -187,9 +194,13 @@ def load_cdd_historical(year, output_dir):
         return None
     data = np.load(path, allow_pickle=True)
     cdd_daily = data['cdd_daily'].astype(float)
+    tmean_daily = (data['tmean_daily'].astype(float)
+                   if 'tmean_daily' in data.files
+                   else np.full_like(cdd_daily, np.nan))
     return {
         'doys':           data['doys'],
         'cdd_cumulative': np.cumsum(cdd_daily, axis=0),
+        'tmean_daily':    tmean_daily,
         'transform':      data['transform'],
     }
 
@@ -229,6 +240,37 @@ def cdd_at_latlon(cdd_data, target_doy, year, lat_vals, lon_vals):
     return cdd_cum[idx, gmet_rows, gmet_cols].astype(float)
 
 
+def tmean_at_latlon(cdd_data, target_doy, lat_vals, lon_vals):
+    """Look up daily mean temperature (°C) at (lat, lon) points for a given DOY.
+
+    Args:
+        cdd_data: Dict from load_cdd_historical, or None.
+        target_doy: Target day-of-year (1–365).
+        lat_vals: 1D float array of WGS84 latitudes.
+        lon_vals: 1D float array of WGS84 longitudes.
+
+    Returns:
+        1D float array of T_mean values in °C.  NaN if data not available.
+    """
+    n = len(lat_vals)
+    if cdd_data is None or 'tmean_daily' not in cdd_data:
+        return np.full(n, np.nan)
+
+    doys        = cdd_data['doys']
+    tmean_daily = cdd_data['tmean_daily']  # (n_days, h, w)
+    t           = cdd_data['transform']
+
+    h_gmet, w_gmet = tmean_daily.shape[1], tmean_daily.shape[2]
+    gmet_cols = np.clip(((lon_vals - t[2]) / t[0]).astype(int), 0, w_gmet - 1)
+    gmet_rows = np.clip(((lat_vals - t[5]) / t[4]).astype(int), 0, h_gmet - 1)
+
+    idx = int(np.searchsorted(doys, target_doy, side='right')) - 1
+    if idx < 0:
+        return np.full(n, np.nan)
+
+    return tmean_daily[idx, gmet_rows, gmet_cols].astype(float)
+
+
 # ---------------------------------------------------------------------------
 # Public API — production (current year, GitHub-stored state)
 # ---------------------------------------------------------------------------
@@ -260,14 +302,17 @@ def update_cdd_state(year, route_buffer, output_dir):
         return state_path
 
     # Load existing state (if any)
-    last_doy = july1_doy - 1
-    cdd_acc  = None
+    last_doy  = july1_doy - 1
+    cdd_acc   = None
+    tmean_last = None
     transform_arr = crs_wkt = None
 
     if os.path.exists(state_path):
         state = np.load(state_path, allow_pickle=True)
         last_doy      = int(state['last_doy'])
         cdd_acc       = state['cdd_acc'].copy().astype(float)
+        tmean_last    = (state['tmean_last'].copy().astype(float)
+                         if 'tmean_last' in state.files else None)
         transform_arr = state['transform'].copy()
         crs_wkt       = str(state['crs_wkt'])
         print(f'  CDD state loaded: last_doy={last_doy}')
@@ -295,21 +340,57 @@ def update_cdd_state(year, route_buffer, output_dir):
         transform_arr = result['transform']
         crs_wkt       = result['crs_wkt']
 
-    cdd_increments = _compute_cdd_increments(result['tmmn_stack'], result['tmmx_stack'])
+    cdd_increments  = _compute_cdd_increments(result['tmmn_stack'], result['tmmx_stack'])
+    tmean_stack     = _compute_tmean_c(result['tmmn_stack'], result['tmmx_stack'])
     for i, doy in enumerate(result['doys']):
-        cdd_acc += cdd_increments[i]
-        last_doy = max(last_doy, int(doy))
+        cdd_acc   += cdd_increments[i]
+        tmean_last = tmean_stack[i]   # keep only the most recent day's T_mean
+        last_doy   = max(last_doy, int(doy))
         print(f'    Accumulated CDD for DOY {doy}')
 
     np.savez_compressed(
         state_path,
         cdd_acc=cdd_acc.astype(np.float32),
+        tmean_last=(tmean_last.astype(np.float32)
+                    if tmean_last is not None
+                    else np.full(cdd_acc.shape, np.nan, dtype=np.float32)),
         last_doy=np.int32(last_doy),
         transform=transform_arr,
         crs_wkt=np.array(str(crs_wkt)),
     )
     print(f'  Saved CDD state → {state_path} (last_doy={last_doy})')
     return state_path
+
+
+def tmean_from_state(state_path, lat_vals, lon_vals):
+    """Look up the most recent daily mean temperature (°C) from the current-year state file.
+
+    Returns the T_mean grid for the last day that was processed (last_doy).
+
+    Args:
+        state_path: Path to cdd_state_{year}.npz.
+        lat_vals: 1D float array of WGS84 latitudes.
+        lon_vals: 1D float array of WGS84 longitudes.
+
+    Returns:
+        1D float array of T_mean values in °C.  NaN if state file or field absent.
+    """
+    n = len(lat_vals)
+    if not os.path.exists(state_path):
+        return np.full(n, np.nan)
+
+    state = np.load(state_path, allow_pickle=True)
+    if 'tmean_last' not in state.files:
+        return np.full(n, np.nan)
+
+    tmean_last = state['tmean_last'].astype(float)
+    t = state['transform']
+
+    h_gmet, w_gmet = tmean_last.shape
+    gmet_cols = np.clip(((lon_vals - t[2]) / t[0]).astype(int), 0, w_gmet - 1)
+    gmet_rows = np.clip(((lat_vals - t[5]) / t[4]).astype(int), 0, h_gmet - 1)
+
+    return tmean_last[gmet_rows, gmet_cols]
 
 
 def cdd_from_state(state_path, year, target_doy, lat_vals, lon_vals):

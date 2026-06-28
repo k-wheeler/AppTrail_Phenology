@@ -423,14 +423,15 @@ window['map{phase}'].on('click', function(e) {{
       pixel&rsquo;s EVI time series to estimate when foliage change starts, peaks, and ends,
       along with 95% confidence intervals.</li>
       <li><strong>Temperature</strong> &mdash; Daily maximum and minimum air temperature
-      (gridMET, ~4 km) are used to compute accumulated cold degree-days (CDD) since
-      July 1: each day contributes max(0, 5&minus;T<sub>mean</sub>&deg;C). CDD
-      captures cumulative chilling that drives color change.</li>
+      (gridMET, ~4 km) provide two features: accumulated cold degree-days (CDD) since
+      July 1 (each day contributes max(0, 5&minus;T<sub>mean</sub>&deg;C), capturing
+      cumulative chilling) and the most recent available daily mean temperature.</li>
       <li><strong>Machine learning</strong> &mdash; A decision tree classifier trained on 10 years
-      of labeled pixel-observations uses 10 features (EVI, NDVI, their recent changes, day length,
+      of labeled pixel-observations uses 11 features (EVI, NDVI, their recent changes, day length,
       days relative to that pixel&rsquo;s historical average mid-transition date, the most
-      common predicted label over the past 7 days, and accumulated cold degree-days since
-      July 1) to assign one of four states: Before, Early, Late, or After.</li>
+      common predicted label over the past 7 days, accumulated cold degree-days since July 1,
+      and the most recent daily mean temperature) to assign one of four states:
+      Before, Early, Late, or After.</li>
       <li><strong>Daily update</strong> &mdash; Each morning, new imagery and temperature data
       are fetched, rolling observation windows are updated, and predictions are recomputed
       for all ~15,000 forest pixels. Today&rsquo;s predictions are stored and used as part of
@@ -489,7 +490,8 @@ var FEAT_LABELS = {{
   'ndvi_delta2':          'NDVI Δ2 (vs 2nd prior obs)',
   'day_length_hrs':       'Day length (hrs)',
   'doy_minus_avg_middle': 'Days from avg mid-transition',
-  'cdd_accumulated':      'Cold degree-days (Jul 1→today)'
+  'cdd_accumulated':      'Cold degree-days (Jul 1→today)',
+  'tmean_recent':         'Recent daily mean temp (°C)'
 }};
 var LABEL_COLORS = {json.dumps(LABEL_COLORS)};
 var LABEL_COLORS_HEX = {{

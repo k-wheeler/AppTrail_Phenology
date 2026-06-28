@@ -127,6 +127,13 @@ def edit_feature_table(feature_df, output_dir):
     if 'cdd_accumulated' in feature_df.columns:
         feature_df['cdd_accumulated'] = feature_df['cdd_accumulated'].fillna(0.0)
 
+    # Fill tmean_recent NaNs with column mean: temperature can be negative so 0
+    # is not a safe default; mean is a neutral imputation before z-scoring.
+    if 'tmean_recent' in feature_df.columns:
+        feature_df['tmean_recent'] = feature_df['tmean_recent'].fillna(
+            feature_df['tmean_recent'].mean()
+        )
+
     #These NaNs occur at the start of years where there aren't previous indices to compare to in the data set
     #Because these are not really needed (don't need to check for senescence at the very beginning of july) drop instead of gap fill
     feature_df = feature_df.dropna(subset=['evi_delta', 'evi_delta2', 'ndvi_delta', 'ndvi_delta2'])

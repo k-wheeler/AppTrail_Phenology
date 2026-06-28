@@ -12,13 +12,13 @@ from build_data_table import (
     _build_cross_year_transition_lookup,
 )
 from edit_data_table import _compute_global_avg_middle
-from gridmet_utils import cdd_from_state
+from gridmet_utils import cdd_from_state, tmean_from_state
 from constants import NODATA
 
 PRED_YEAR = datetime.date.today().year
 FEATURE_COLS = ['EVI', 'NDVI', 'evi_delta', 'evi_delta2',
                 'ndvi_delta', 'ndvi_delta2', 'day_length_hrs', 'doy_minus_avg_middle',
-                'mode_label_7day', 'cdd_accumulated']
+                'mode_label_7day', 'cdd_accumulated', 'tmean_recent']
 
 
 def _compute_mode_7day(recent_labels, r, c):
@@ -233,10 +233,11 @@ def predict_phenology(date_str, output_dir):
     X[:, 7] = doy_minus
     # No rolling label history in the full-stack path; nan_to_num fills to normalized mean
     X[:, 8] = np.nan
-    # CDD from current-year state file if available, else nan (imputed to mean at normalize step)
+    # CDD and T_mean from current-year state file; nan imputed to mean at normalize step
     cdd_state_path = os.path.join(output_dir, f'cdd_state_{PRED_YEAR}.npz')
-    X[:, 9] = cdd_from_state(cdd_state_path, PRED_YEAR, target_doy,
-                              lat_array[r, c], lon_array[r, c])
+    X[:, 9]  = cdd_from_state(cdd_state_path, PRED_YEAR, target_doy,
+                               lat_array[r, c], lon_array[r, c])
+    X[:, 10] = tmean_from_state(cdd_state_path, lat_array[r, c], lon_array[r, c])
 
     # Z-score normalization using saved training statistics
     for j, col in enumerate(FEATURE_COLS):
@@ -349,10 +350,11 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
     X[:, 7] = doy_minus
     X[:, 8] = _compute_mode_7day(recent_labels, r, c)
 
-    # cdd_accumulated: look up from current-year state file (committed to GitHub)
+    # cdd_accumulated and tmean_recent: look up from current-year state file
     cdd_state_path = os.path.join(output_dir, f'cdd_state_{year}.npz')
-    X[:, 9] = cdd_from_state(cdd_state_path, year, target_doy,
-                              lat_array[r, c], lon_array[r, c])
+    X[:, 9]  = cdd_from_state(cdd_state_path, year, target_doy,
+                               lat_array[r, c], lon_array[r, c])
+    X[:, 10] = tmean_from_state(cdd_state_path, lat_array[r, c], lon_array[r, c])
 
     # Capture raw (pre-normalization) feature values for the popup JSON
     X_raw = X.copy()
