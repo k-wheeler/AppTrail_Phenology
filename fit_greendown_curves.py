@@ -15,7 +15,7 @@ N_CI_SAMPLES = 200  # Monte Carlo samples for confidence intervals
 # only needs 3 for the spectral deltas, but the mode_label_7day feature re-predicts
 # every observation in the 7-day window, which (plus the two predecessors each
 # needs for its own deltas) can reach back several observations.
-OBS_WINDOW = 8
+OBS_WINDOW = 20
 
 
 # ----------------------------
@@ -430,6 +430,14 @@ def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
             state['evi_w']  = _seed_window(state, 'evi',  h, w)
             state['ndvi_w'] = _seed_window(state, 'ndvi', h, w)
             state['doy_w']  = _seed_window(state, 'doy',  h, w)
+        # Expand window arrays if OBS_WINDOW grew (e.g. 8 → 20). Pad older slots
+        # with NaN so existing observations are preserved at the newest end.
+        for key in ('evi_w', 'ndvi_w', 'doy_w'):
+            old = state[key]
+            if old.shape[2] < OBS_WINDOW:
+                expanded = np.full((h, w, OBS_WINDOW), np.nan, dtype=np.float32)
+                expanded[:, :, :old.shape[2]] = old
+                state[key] = expanded
         # Predictions are no longer persisted; drop any legacy label-history arrays.
         state.pop('recent_labels', None)
         state.pop('recent_label_doys', None)

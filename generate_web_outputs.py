@@ -42,6 +42,7 @@ from map_utils import _pred_grid_to_rgba
 from fit_greendown_curves import update_pixel_state
 from identify_locations import identify_route_buffer, identify_forests, identify_maroute
 from predict_for_date import predict_from_pixel_state
+from rnn_model import predict_rnn_from_pixel_state
 from gridmet_utils import update_cdd_state
 
 
@@ -277,18 +278,21 @@ def _generate_feature_importance_png(output_dir, web_dir):
     print(f'  Saved {out_path}')
 
 
-def _render_html(web_dir, meta):
+def _render_html(web_dir, meta, areas_rnn=None):
     """Render the static index.html page for the GitHub Pages site.
 
     Args:
-        web_dir: Directory to write index.html.
-        meta: Dict loaded from current_meta.json.
+        web_dir:    Directory to write index.html.
+        meta:       Dict loaded from current_meta.json.
+        areas_rnn:  Dict of {label: sq_miles} for the RNN prediction, or None
+                    if the RNN model is not available.
     """
-    date_str = meta['date']
-    bounds   = meta['bounds']           # [[s, w], [n, e]]
-    areas    = meta.get('areas_sqmi', {})
-    center   = [(bounds[0][0] + bounds[1][0]) / 2,
-                (bounds[0][1] + bounds[1][1]) / 2]
+    date_str  = meta['date']
+    bounds    = meta['bounds']           # [[s, w], [n, e]]
+    areas_dt  = meta.get('areas_sqmi', {})
+    has_rnn   = areas_rnn is not None
+    center    = [(bounds[0][0] + bounds[1][0]) / 2,
+                 (bounds[0][1] + bounds[1][1]) / 2]
 
     # Build legend HTML rows (label + plain-English description)
     _label_desc = {
@@ -318,17 +322,20 @@ def _render_html(web_dir, meta):
         '</div>'
     )
 
-    # Build histogram bars (area label above bar, name below)
-    total_area = sum(v for k, v in areas.items() if k != 'unknown') or 1
-    hist_bars = ''.join(
-        f'<div class="bar-wrap">'
-        f'<div class="bar-area">{areas.get(l,0):.1f} mi²</div>'
-        f'<div class="bar" style="height:{int(areas.get(l,0)/total_area*160)}px;'
-        f'background:{LABEL_COLORS[l]}"></div>'
-        f'<div class="bar-label">{l.capitalize()}</div>'
-        f'</div>'
-        for l in LABEL_ORDER if l != 'unknown'
-    )
+    def _hist_bars(areas):
+        total = sum(v for k, v in areas.items() if k != 'unknown') or 1
+        return ''.join(
+            f'<div class="bar-wrap">'
+            f'<div class="bar-area">{areas.get(l,0):.1f} mi²</div>'
+            f'<div class="bar" style="height:{int(areas.get(l,0)/total*160)}px;'
+            f'background:{LABEL_COLORS[l]}"></div>'
+            f'<div class="bar-label">{l.capitalize()}</div>'
+            f'</div>'
+            for l in LABEL_ORDER if l != 'unknown'
+        )
+
+    hist_bars_dt  = _hist_bars(areas_dt)
+    hist_bars_rnn = _hist_bars(areas_rnn) if has_rnn else ''
 
     # Check which avg maps are available
     avg_tabs = ''
@@ -407,8 +414,8 @@ window['map{phase}'].on('click', function(e) {{
   .tab.active {{ background: #2c6b3f; color: white; }}
   .panel {{ display: none; padding: 20px; }}
   .panel.active {{ display: flex; gap: 20px; flex-wrap: wrap; }}
-  #map-today {{ width: 620px; height: 480px; border-radius: 6px;
-                border: 1px solid #ccc; }}
+  #map-dt, #map-rnn {{ width: 620px; height: 480px; border-radius: 6px;
+                       border: 1px solid #ccc; }}
   .sidebar {{ display: flex; flex-direction: column; gap: 16px; }}
   .legend {{ background: white; border: 1px solid #ccc; border-radius: 6px;
               padding: 12px 16px; }}
@@ -426,7 +433,8 @@ window['map{phase}'].on('click', function(e) {{
   .bar {{ width: 44px; border-radius: 3px 3px 0 0; min-height: 2px; }}
   .bar-area {{ font-size: 0.72rem; color: #555; margin-bottom: 2px; }}
   .bar-label {{ font-size: 0.75rem; margin-top: 4px; color: #555; }}
-  #panel-about.active {{ display: block; max-width: 720px; }}
+  #panel-about.active, #panel-rnn.active {{ display: block; }}
+  #panel-about.active {{ max-width: 720px; }}
   .about-content h3 {{ color: #2c6b3f; font-size: 1rem; margin: 16px 0 6px; }}
   .about-content h3:first-child {{ margin-top: 0; }}
   .about-content p, .about-content li {{ font-size: 0.9rem; line-height: 1.5; color: #333; }}
@@ -451,21 +459,25 @@ window['map{phase}'].on('click', function(e) {{
      10 years of observations.</p>
 </header>
 <div class="tabs">
-  <div class="tab active" onclick="showTab('today', this)">Today's Prediction</div>
+  <div class="tab active" onclick="showTab('dt', this)">Decision Tree</div>
+  <div class="tab" onclick="showTab('rnn', this)">Neural Network</div>
   <div class="tab" onclick="showTab('history', this)">Historical Averages</div>
   <div class="tab" onclick="showTab('about', this)">About</div>
 </div>
-<div id="panel-today" class="panel active">
-  <div id="map-today"></div>
+<div id="panel-dt" class="panel active">
+  <div id="map-dt"></div>
   <div class="sidebar">
     <div class="legend">
       <h3>Phenological State</h3>
       {legend_rows}
     </div>
     <div class="histogram">
-      {hist_bars}
+      {hist_bars_dt}
     </div>
   </div>
+</div>
+<div id="panel-rnn" class="panel">
+  {'<div id="map-rnn"></div><div class="sidebar"><div class="legend"><h3>Phenological State</h3>' + legend_rows + '</div><div class="histogram">' + hist_bars_rnn + '</div></div>' if has_rnn else '<p style="color:#777;padding:20px">Neural Network model not yet available. Run the RNN training cell in Main.ipynb and commit rnn_model.pt to enable this tab.</p>'}
 </div>
 <div id="panel-history" class="panel">
   {avg_tabs if avg_tabs else '<p style="color:#777">Average transition maps not yet available.</p>'}
@@ -486,21 +498,28 @@ window['map{phase}'].on('click', function(e) {{
       <li><strong>Greendown curves</strong> &mdash; A decreasing logistic curve is fitted to each
       pixel&rsquo;s EVI time series to estimate when foliage change starts, peaks, and ends,
       along with 95% confidence intervals.</li>
-      <li><strong>Machine learning</strong> &mdash; A decision tree classifier trained on 10 years
-      of labeled pixel-observations uses 9 features (EVI, NDVI, their recent changes, day length,
+      <li><strong>Decision tree</strong> &mdash; A decision tree classifier trained on 10 years of
+      labeled pixel-observations uses 9 features (EVI, NDVI, their recent changes, day length,
       days relative to that pixel&rsquo;s historical average mid-transition date, and the most
       common predicted state over the past 7 days) to assign one of four states:
       Before, Early, Late, or After.</li>
+      <li><strong>Neural network</strong> &mdash; A two-layer LSTM (long short-term memory) network
+      processes the full sequence of satellite observations for each pixel, from the start of the
+      season to today. It uses 10 features &mdash; the same 9 as the decision tree plus daily
+      temperature signals (accumulated cool-degree-days and recent mean temperature) &mdash; and
+      learns how foliage change unfolds over time rather than treating each observation
+      independently.</li>
       <li><strong>Daily update</strong> &mdash; Each morning, new imagery and temperature data
-      are fetched, rolling observation windows are updated, and predictions are recomputed
-      for all ~15,000 forest pixels. The 7-day mode feature is recomputed each run by
-      re-predicting every observation from the past week, so no predictions are stored.</li>
+      are fetched, rolling observation windows are updated, and predictions from both models are
+      recomputed for all ~15,000 forest pixels.</li>
     </ol>
 
     <h3>Interacting with the map</h3>
     <ul>
-      <li>Click any colored pixel to see the raw satellite values, model features, and a
-      7-day prediction history for that location.</li>
+      <li>The <em>Decision Tree</em> tab shows today&rsquo;s prediction from the decision tree.
+      Click any pixel to see raw satellite values, model features, and recent observation history.</li>
+      <li>The <em>Neural Network</em> tab shows today&rsquo;s prediction from the LSTM model.
+      Click any pixel to see its predicted state and recent observation history.</li>
       <li>Zoom in to explore individual 30 m pixels.</li>
       <li>The <em>Historical Averages</em> tab shows the long-term average start, middle, and
       end of greendown, giving context for how this year compares to prior years.</li>
@@ -515,11 +534,13 @@ window['map{phase}'].on('click', function(e) {{
       <li>Spatial grid: UTM Zone 18N (EPSG:32618), 30 m resolution</li>
     </ul>
 
-    <h3>What drives the predictions?</h3>
-    <p>The chart below shows each input signal&rsquo;s <em>feature importance</em> &mdash; how
-    often the model used that signal when splitting pixels into phenological stages during
-    training. A higher value means the model relied on that signal more heavily; values
-    sum to 1.0 across all features.</p>
+    <h3>What drives the decision tree?</h3>
+    <p>The chart below shows each input signal&rsquo;s <em>feature importance</em> for the
+    decision tree &mdash; how often the model used that signal when splitting pixels into
+    phenological stages during training. A higher value means the model relied on that signal
+    more heavily; values sum to 1.0 across all features. The neural network learns its own
+    internal weighting across the full seasonal sequence and does not produce comparable
+    importance scores.</p>
     <img src="feature_importance.png" alt="Feature importance bar chart"
          style="width:100%;max-width:580px;margin:8px 0 4px;display:block">
   </div>
@@ -530,20 +551,25 @@ function showTab(name, el) {{
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
   el.classList.add('active');
-  // Force Leaflet to recalculate map size after the container becomes visible
   if (name === 'history') {{
     ['start', 'middle', 'end'].forEach(function(p) {{
       var m = window['map' + p];
       if (m) {{ m.invalidateSize(); }}
     }});
   }}
+  if (name === 'dt'  && mapDt)  {{ mapDt.invalidateSize();  }}
+  if (name === 'rnn' && mapRnn) {{ mapRnn.invalidateSize(); }}
 }}
 
-// Today's prediction map
-var mapToday = L.map('map-today').setView({center}, 10);
+// Decision Tree prediction map
+var mapDt = L.map('map-dt').setView({center}, 10);
 L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',
-    {{attribution: '&copy; OpenStreetMap contributors &copy; CARTO'}}).addTo(mapToday);
-L.imageOverlay('current_pred.png?v={date_str}', {bounds}, {{opacity: 1.0}}).addTo(mapToday);
+    {{attribution: '&copy; OpenStreetMap contributors &copy; CARTO'}}).addTo(mapDt);
+L.imageOverlay('current_pred_dt.png?v={date_str}', {bounds}, {{opacity: 1.0}}).addTo(mapDt);
+
+// Neural Network prediction map
+var mapRnn = null;
+{'var mapRnn = L.map("map-rnn").setView(' + str(center) + ', 10);' + chr(10) + 'L.tileLayer("https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png", {{attribution: "&copy; OpenStreetMap contributors &copy; CARTO"}}).addTo(mapRnn);' + chr(10) + 'L.imageOverlay("current_pred_rnn.png?v={date_str}", {bounds}, {{opacity: 1.0}}).addTo(mapRnn);' if has_rnn else ''}
 
 // Pixel-click popup: each pixel stores its WGS84 centre lat/lon so lookup
 // is a simple nearest-neighbour search — no coordinate transform needed.
@@ -580,20 +606,27 @@ fetch('pixel_features.json?v=' + Date.now())
 // (or essentially on) a forest pixel — adjacent non-forest pixels won't match.
 var SNAP_SQ = 0.0002 * 0.0002;
 
-mapToday.on('click', function(e) {{
-  if (!pixelArr) {{ console.log('click ignored — pixelArr not loaded yet'); return; }}
-  var lat = e.latlng.lat, lon = e.latlng.lng;
+function findPixel(lat, lon) {{
+  if (!pixelArr) return null;
   var best = null, bestDist = Infinity;
   for (var i = 0; i < pixelArr.length; i++) {{
     var px = pixelArr[i];
     var d = (px.lat - lat) * (px.lat - lat) + (px.lon - lon) * (px.lon - lon);
     if (d < bestDist) {{ bestDist = d; best = px; }}
   }}
-  console.log('click', lat.toFixed(5), lon.toFixed(5),
-              '| nearest dist:', Math.sqrt(bestDist).toFixed(6),
-              '| threshold:', Math.sqrt(SNAP_SQ).toFixed(6),
-              '| nearest:', best);
-  var p = (best && bestDist <= SNAP_SQ) ? best : null;
+  return (best && bestDist <= SNAP_SQ) ? best : null;
+}}
+function makeHistChips(labels) {{
+  return (labels || []).map(function(l) {{
+    if (!l) return '<span style="color:#bbb">&mdash;</span>';
+    var col = LABEL_COLORS_HEX[l] || '#888';
+    return '<span style="color:' + col + ';font-weight:600">' +
+           l.charAt(0).toUpperCase() + l.slice(1) + '</span>';
+  }}).join('<span style="color:#ccc"> &middot; </span>');
+}}
+
+mapDt.on('click', function(e) {{
+  var p = findPixel(e.latlng.lat, e.latlng.lng);
   if (!p) return;
   var labelColor = LABEL_COLORS[p.label] || '#888';
   var rows = Object.keys(FEAT_LABELS).map(function(k) {{
@@ -609,26 +642,32 @@ mapToday.on('click', function(e) {{
     return '<tr><td style="padding:2px 10px 2px 0;color:#555">' + FEAT_LABELS[k] + '</td>' +
            '<td style="text-align:right;font-variant-numeric:tabular-nums">' + val + '</td></tr>';
   }}).join('');
-  var histArr = (p.recent_labels || []);
-  var histChips = histArr.map(function(l) {{
-    if (!l) return '<span style="color:#bbb">&mdash;</span>';
-    var col = LABEL_COLORS_HEX[l] || '#888';
-    return '<span style="color:' + col + ';font-weight:600">' +
-           l.charAt(0).toUpperCase() + l.slice(1) + '</span>';
-  }}).join('<span style="color:#ccc"> &middot; </span>');
   var html = '<div style="font-size:13px;min-width:230px">' +
-    '<b>Predicted: <span style="color:' + labelColor + '">' +
+    '<b>Decision Tree: <span style="color:' + labelColor + '">' +
     p.label.charAt(0).toUpperCase() + p.label.slice(1) + '</span></b>' +
     '<div style="margin-top:6px;font-size:11px;color:#777">Recent observations (newest → oldest)</div>' +
-    '<div style="margin-bottom:6px;font-size:12px">' + histChips + '</div>' +
-    '<table style="width:100%;border-collapse:collapse">' +
-    rows + '</table>' +
+    '<div style="margin-bottom:6px;font-size:12px">' + makeHistChips(p.recent_labels) + '</div>' +
+    '<table style="width:100%;border-collapse:collapse">' + rows + '</table>' +
     '<p style="margin-top:8px;font-size:11px;color:#999;line-height:1.4">' +
-    'EVI/NDVI: vegetation greenness (0–1, higher = greener). ' +
+    'EVI/NDVI: vegetation greenness (0–1, higher = greener). ' +
     'Δ values: change from prior satellite pass. ' +
-    'Days from avg mid-transition: negative = earlier than historical average.' +
+    'Days from avg mid-transition: negative = earlier than historical average.' +
     '</p></div>';
-  L.popup().setLatLng(e.latlng).setContent(html).openOn(mapToday);
+  L.popup().setLatLng(e.latlng).setContent(html).openOn(mapDt);
+}});
+
+if (mapRnn) mapRnn.on('click', function(e) {{
+  var p = findPixel(e.latlng.lat, e.latlng.lng);
+  if (!p) return;
+  var rnnLbl = p.rnn_label || 'unknown';
+  var labelColor = LABEL_COLORS[rnnLbl] || '#888';
+  var html = '<div style="font-size:13px;min-width:200px">' +
+    '<b>Neural Network: <span style="color:' + labelColor + '">' +
+    rnnLbl.charAt(0).toUpperCase() + rnnLbl.slice(1) + '</span></b>' +
+    '<div style="margin-top:6px;font-size:11px;color:#777">Recent observations (newest → oldest)</div>' +
+    '<div style="margin-bottom:4px;font-size:12px">' + makeHistChips(p.recent_labels) + '</div>' +
+    '<p style="margin-top:6px;font-size:11px;color:#999;line-height:1.4">The LSTM uses the full observation sequence. Individual feature values are shown on the Decision Tree tab.</p></div>';
+  L.popup().setLatLng(e.latlng).setContent(html).openOn(mapRnn);
 }});
 
 // Average transition maps
@@ -646,7 +685,8 @@ fetch('at_route.geojson')
   .then(function(r) {{ return r.json(); }})
   .then(function(gj) {{
     atRoute = gj;
-    addRoute(mapToday);
+    addRoute(mapDt);
+    if (mapRnn) addRoute(mapRnn);
     ['start', 'middle', 'end'].forEach(function(p) {{ addRoute(window['map' + p]); }});
   }})
   .catch(function(e) {{ console.warn('at_route.geojson not loaded:', e); }});
@@ -771,23 +811,41 @@ def main():
     _label_dec = {-1: None, 0: 'before', 1: 'early', 2: 'late', 3: 'after'}
     _recent_labels = recent_info['labels']   # (h, w, N) int8, slot 0 newest
 
-    # Save prediction PNG, warped to Web Mercator so it aligns with the basemap.
+    # Save DT prediction PNG, warped to Web Mercator so it aligns with the basemap.
     # bounds comes from the warped raster and is reused for all overlays.
-    rgba = _pred_grid_to_rgba(pred_grid, forest_mask, opacity=0.85)
-    rgba_web, bounds = _reproject_rgba_to_web(rgba, transform, crs)
-    pred_png_path = os.path.join(args.web_dir, 'current_pred.png')
-    Image.fromarray(rgba_web, mode='RGBA').save(pred_png_path)
-    print(f'  Saved {pred_png_path}')
+    rgba_dt = _pred_grid_to_rgba(pred_grid, forest_mask, opacity=0.85)
+    rgba_dt_web, bounds = _reproject_rgba_to_web(rgba_dt, transform, crs)
+    dt_png_path = os.path.join(args.web_dir, 'current_pred_dt.png')
+    Image.fromarray(rgba_dt_web, mode='RGBA').save(dt_png_path)
+    print(f'  Saved {dt_png_path}')
 
-    # Compute area per label (sq miles)
+    # Compute area per label (sq miles) — decision tree
     pixel_area_sqmi = abs(transform.a * transform.e) / 2.59e6
     forest_labels   = pred_grid[forest_mask]
-    areas = {}
+    areas_dt = {}
     for label in LABEL_ORDER:
-        areas[label] = float((forest_labels == label).sum() * pixel_area_sqmi)
+        areas_dt[label] = float((forest_labels == label).sum() * pixel_area_sqmi)
+
+    # Run RNN prediction (requires rnn_model.pt in output_dir)
+    print(f'\nRunning RNN prediction for {today_str}...')
+    rnn_result = predict_rnn_from_pixel_state(state_path, today_str, args.output_dir)
+    has_rnn = rnn_result is not None
+    pred_grid_rnn = None
+    areas_rnn = {}
+    if has_rnn:
+        pred_grid_rnn, _, _, _ = rnn_result
+        rgba_rnn = _pred_grid_to_rgba(pred_grid_rnn, forest_mask, opacity=0.85)
+        rgba_rnn_web, _ = _reproject_rgba_to_web(rgba_rnn, transform, crs)
+        rnn_png_path = os.path.join(args.web_dir, 'current_pred_rnn.png')
+        Image.fromarray(rgba_rnn_web, mode='RGBA').save(rnn_png_path)
+        print(f'  Saved {rnn_png_path}')
+        for label in LABEL_ORDER:
+            areas_rnn[label] = float(
+                (pred_grid_rnn[forest_mask] == label).sum() * pixel_area_sqmi)
 
     # Write metadata JSON
-    meta = {'date': today_str, 'bounds': bounds, 'areas_sqmi': areas}
+    meta = {'date': today_str, 'bounds': bounds,
+            'areas_sqmi': areas_dt, 'areas_sqmi_rnn': areas_rnn}
     meta_path = os.path.join(args.web_dir, 'current_meta.json')
     with open(meta_path, 'w') as f:
         json.dump(meta, f, indent=2)
@@ -826,6 +884,7 @@ def main():
             'lat': round(float(px_lats[i]), 6),
             'lon': round(float(px_lons[i]), 6),
             'label': str(pred_grid[ri, ci]),
+            'rnn_label': str(pred_grid_rnn[ri, ci]) if has_rnn else None,
         }
         for feat_col, grid in feature_grids.items():
             v = float(grid[ri, ci])
@@ -859,7 +918,7 @@ def main():
 
     # Render HTML
     print('\nRendering index.html...')
-    _render_html(args.web_dir, meta)
+    _render_html(args.web_dir, meta, areas_rnn=areas_rnn if has_rnn else None)
 
     print('\nDone.')
 

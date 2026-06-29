@@ -200,7 +200,8 @@ def _add_mode_label_7day(df):
     return df
 
 
-def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
+def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH,
+                        retain_pixel_id=False, include_temperature=False):
     """Build a labeled feature table from EVI/NDVI time series for qualifying pixel-years.
 
     Filters to pixel-years where all three CI widths are < max_width days, then labels
@@ -210,11 +211,15 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
         output_dir: Path to directory containing stacks, DOY arrays, and GeoTIFFs.
         years: List of integer years to process.
         max_width: Maximum CI width in days for a pixel-year to qualify.
+        retain_pixel_id: If True, keep the pixel_id column in the returned DataFrame
+            (needed for RNN sequence construction). Default False (DT pipeline).
+        include_temperature: If True, compute and include cdd_accumulated and
+            tmean_recent columns (from gridMET). Default False (DT pipeline).
 
     Returns:
-        DataFrame with columns: year, date, doy, EVI, NDVI, evi_delta, evi_delta2,
-        ndvi_delta, ndvi_delta2, day_length_hrs, doy_minus_avg_start,
-        doy_minus_avg_middle, doy_minus_avg_end, label.
+        DataFrame with columns: year, date, doy, [pixel_id], EVI, NDVI, evi_delta,
+        evi_delta2, ndvi_delta, ndvi_delta2, day_length_hrs, doy_minus_avg_start,
+        doy_minus_avg_middle, doy_minus_avg_end, [cdd_accumulated, tmean_recent], label.
     """
     phases = ('start', 'middle', 'end')
     widths = load_ci_widths(output_dir, years)
@@ -242,7 +247,8 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
         doys          = np.load(os.path.join(output_dir, f'hls_indices_doys_{year}.npy'))
         points        = _load_point_estimates(output_dir, year)
         lat_array, lon_array = _load_lat_lon_arrays(output_dir, year)
-        # cdd_hist      = load_cdd_historical(year, output_dir)   # temperature features disabled
+        if include_temperature:
+            cdd_hist = load_cdd_historical(year, output_dir)
 
         pixel_rows, pixel_cols = np.where(mask)
         print(f'  {year}: {len(pixel_rows)} qualifying pixels')
@@ -290,20 +296,15 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
                 prev2_ndvi  = prev_ndvi
                 prev_ndvi   = float(ndvi)
                 date = (datetime.date(year, 1, 1) + datetime.timedelta(days=int(doy) - 1)).isoformat()
-                # --- Temperature features disabled. To re-enable, uncomment these
-                # lines, the 'cdd_accumulated'/'tmean_recent' entries in the row
-                # dict and the DataFrame column list below, FEATURE_COLS in
-                # predict_for_date.py, and the FEAT_LABELS entries in
-                # generate_web_outputs.py, then retrain.
-                # Sample CDD and daily mean temperature for the PREVIOUS day
-                # (doy - 1) to match serving, where the most recent available
-                # gridMET reading lags the prediction date by ~1-2 days.
-                # prev_doy = int(doy) - 1
-                # cdd   = float(cdd_at_latlon(cdd_hist, prev_doy, year,
-                #                             np.array([lat]), np.array([lon]))[0])
-                # tmean = float(tmean_at_latlon(cdd_hist, prev_doy,
-                #                               np.array([lat]), np.array([lon]))[0])
-                rows.append({
+                # Sample CDD and daily mean temperature for the PREVIOUS day (doy - 1)
+                # to match serving, where gridMET lags the prediction date by ~1-2 days.
+                if include_temperature:
+                    prev_doy = int(doy) - 1
+                    cdd   = float(cdd_at_latlon(cdd_hist, prev_doy, year,
+                                                np.array([lat]), np.array([lon]))[0])
+                    tmean = float(tmean_at_latlon(cdd_hist, prev_doy,
+                                                  np.array([lat]), np.array([lon]))[0])
+                row = {
                     'year':                      year,
                     'date':                      date,
                     'doy':                       int(doy),
@@ -318,22 +319,26 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
                     'doy_minus_avg_start':  int(doy) - avg_doys['start'],
                     'doy_minus_avg_middle': int(doy) - avg_doys['middle'],
                     'doy_minus_avg_end':    int(doy) - avg_doys['end'],
-                    # 'cdd_accumulated':           cdd,      # temperature features disabled
-                    # 'tmean_recent':              tmean,    # temperature features disabled
                     'label':                     _assign_label(doy, start, middle, end),
-                })
+                }
+                if include_temperature:
+                    row['cdd_accumulated'] = cdd
+                    row['tmean_recent']    = tmean
+                rows.append(row)
 
-    df = pd.DataFrame(rows, columns=[
+    base_cols = [
         'year', 'date', 'doy', 'pixel_id', 'EVI', 'NDVI',
         'evi_delta', 'evi_delta2', 'ndvi_delta', 'ndvi_delta2',
         'day_length_hrs',
         'doy_minus_avg_start', 'doy_minus_avg_middle', 'doy_minus_avg_end',
-        # 'cdd_accumulated', 'tmean_recent',   # temperature features disabled
         'label',
-    ])
+    ]
+    temp_cols = ['cdd_accumulated', 'tmean_recent'] if include_temperature else []
+    df = pd.DataFrame(rows, columns=base_cols[:-1] + temp_cols + ['label'])
     print(f'\nTotal labeled phenology observations: {len(df)}')
     df = _add_mode_label_7day(df)
-    df = df.drop(columns=['pixel_id'])
+    if not retain_pixel_id:
+        df = df.drop(columns=['pixel_id'])
     return df
 
 

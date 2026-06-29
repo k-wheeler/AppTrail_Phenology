@@ -36,7 +36,7 @@ def _load_pixel_features(web_dir):
 
 
 def check_expected_files(web_dir):
-    expected = ['index.html', 'current_pred.png', 'current_meta.json',
+    expected = ['index.html', 'current_pred_dt.png', 'current_meta.json',
                 'pixel_features.json', 'at_route.geojson']
     missing = [f for f in expected if not os.path.exists(os.path.join(web_dir, f))]
     if missing:
@@ -56,13 +56,13 @@ def check_index_size(web_dir):
 
 
 def check_pred_png(web_dir):
-    path = os.path.join(web_dir, 'current_pred.png')
+    path = os.path.join(web_dir, 'current_pred_dt.png')
     if not os.path.exists(path):
-        return _check('current_pred.png non-empty', False, 'File missing')
+        return _check('current_pred_dt.png non-empty', False, 'File missing')
     size = os.path.getsize(path)
     if size < 1_000:
-        return _check('current_pred.png non-empty', False, f'Only {size} bytes')
-    return _check('current_pred.png non-empty', True, f'{size // 1024} KB')
+        return _check('current_pred_dt.png non-empty', False, f'Only {size} bytes')
+    return _check('current_pred_dt.png non-empty', True, f'{size // 1024} KB')
 
 
 def check_meta_json(web_dir, today_str):
