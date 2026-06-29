@@ -3,8 +3,10 @@
 # Raster nodata value used in all GeoTIFF outputs
 NODATA = -9999.0
 
-# Output directory for all GeoTIFFs, numpy stacks, and model files
-OUTPUT_DIR = './greendown_outputs'
+# Directory paths for processed data, greendown outputs, and model files
+DATA_DIR      = './Data'
+GREENDOWN_DIR = './Greendown_Outputs'
+MODEL_DIR     = './Model_Outputs'
 
 # CI width thresholds (days)
 MAX_CI_WIDTH = 15             # pixels must have all CI widths < this to enter the feature table

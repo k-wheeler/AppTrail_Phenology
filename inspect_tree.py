@@ -7,7 +7,7 @@ day-length / day values. Follow the indented if/else branches from the top to
 see exactly which conditions lead to each predicted phenological state.
 
 Usage:
-    python inspect_tree.py [--output-dir ./greendown_outputs] [--plot]
+    python inspect_tree.py [--model-dir ./Model_Outputs] [--plot]
 """
 import argparse
 import json
@@ -56,13 +56,13 @@ def print_rules(mdl, feature_names, norm_stats):
 
 def main():
     parser = argparse.ArgumentParser(description='Inspect the fitted decision tree.')
-    parser.add_argument('--output-dir', default='./greendown_outputs')
+    parser.add_argument('--model-dir', default='./Model_Outputs')
     parser.add_argument('--plot', action='store_true',
                         help='Also save a full-depth tree plot PNG.')
     args = parser.parse_args()
 
-    mdl = joblib.load(os.path.join(args.output_dir, 'decision_tree_model.joblib'))
-    with open(os.path.join(args.output_dir, 'norm_stats.json')) as f:
+    mdl = joblib.load(os.path.join(args.model_dir, 'decision_tree_model.joblib'))
+    with open(os.path.join(args.model_dir, 'norm_stats.json')) as f:
         norm_stats = json.load(f)
 
     print(f'Tree depth: {mdl.get_depth()}   leaves: {mdl.get_n_leaves()}')
@@ -83,7 +83,7 @@ def main():
         fig, ax = plt.subplots(figsize=(60, 30))
         tree.plot_tree(mdl, feature_names=FEATURE_COLS,
                        class_names=list(mdl.classes_), filled=True, ax=ax)
-        out = os.path.join(args.output_dir, 'decision_tree_full.png')
+        out = os.path.join(args.model_dir, 'decision_tree_full.png')
         fig.savefig(out, dpi=120, bbox_inches='tight')
         plt.close()
         print(f'\nSaved full-depth plot to {out}  '

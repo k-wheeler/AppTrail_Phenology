@@ -66,14 +66,14 @@ def _compute_cdd_increments(tmmn_k, tmmx_k):
     return np.where(np.isfinite(tmean_c), np.maximum(0.0, CDD_THRESH_C - tmean_c), 0.0)
 
 
-def _download_gridmet_range(start_date, end_date, route_buffer, output_dir, tag):
+def _download_gridmet_range(start_date, end_date, route_buffer, data_dir, tag):
     """Download gridMET Tmax+Tmin images for [start_date, end_date) from GEE.
 
     Args:
         start_date: datetime.date for filter start (inclusive).
         end_date: datetime.date for filter end (exclusive).
         route_buffer: GEE Geometry for the download region.
-        output_dir: Directory for temporary files.
+        data_dir: Directory for temporary files.
         tag: String tag used in temp filenames (e.g., year or 'upd').
 
     Returns:
@@ -105,7 +105,7 @@ def _download_gridmet_range(start_date, end_date, route_buffer, output_dir, tag)
 
     for i, doy in enumerate(all_doys):
         img = ee.Image(image_list.get(i))
-        tmp_path = os.path.join(output_dir, f'_tmp_gridmet_{tag}_{i:03d}.tif')
+        tmp_path = os.path.join(data_dir, f'_tmp_gridmet_{tag}_{i:03d}.tif')
 
         for attempt in range(3):
             geemap.ee_export_image(img, filename=tmp_path, scale=4638,
@@ -157,7 +157,7 @@ def _cdd_from_result(result, aug1_doy):
     return cdd_daily
 
 
-def fetch_gridmet_cdd_historical(year, route_buffer, output_dir):
+def fetch_gridmet_cdd_historical(year, route_buffer, data_dir):
     """Download gridMET for a full historical season and save daily CDD increments.
 
     Stores greendown_outputs/gridmet_cdd_{year}.npz with keys:
@@ -175,12 +175,12 @@ def fetch_gridmet_cdd_historical(year, route_buffer, output_dir):
     Args:
         year: Integer year.
         route_buffer: GEE Geometry for the AT corridor.
-        output_dir: Local directory for persistent storage.
+        data_dir: Local directory for persistent storage.
 
     Returns:
         Path to the .npz file, or None if no data is available.
     """
-    out_path  = os.path.join(output_dir, f'gridmet_cdd_{year}.npz')
+    out_path  = os.path.join(data_dir, f'gridmet_cdd_{year}.npz')
     aug1_doy  = _aug1_doy(year)
     start     = datetime.date(year, HIST_FETCH_START_MONTH, HIST_FETCH_START_DAY)
     start_doy = start.timetuple().tm_yday
@@ -200,7 +200,7 @@ def fetch_gridmet_cdd_historical(year, route_buffer, output_dir):
     if cached is not None:
         gap_end = _doy_to_date(year, int(cached['doys'].min()) - 1)
         print(f'  Extending {year} gridMET coverage ({start} – {gap_end})...')
-        result = _download_gridmet_range(start, gap_end, route_buffer, output_dir, str(year))
+        result = _download_gridmet_range(start, gap_end, route_buffer, data_dir, str(year))
         if result is None:
             print(f'  No earlier gridMET data available for {year}; keeping cache.')
             return out_path
@@ -220,7 +220,7 @@ def fetch_gridmet_cdd_historical(year, route_buffer, output_dir):
 
     if cached is None:
         print(f'  Downloading gridMET Tmax/Tmin for {year} ({start} – Dec 31)...')
-        result = _download_gridmet_range(start, dec31, route_buffer, output_dir, str(year))
+        result = _download_gridmet_range(start, dec31, route_buffer, data_dir, str(year))
         if result is None:
             print(f'  No gridMET data available for {year}.')
             return None
@@ -242,18 +242,18 @@ def fetch_gridmet_cdd_historical(year, route_buffer, output_dir):
     return out_path
 
 
-def load_cdd_historical(year, output_dir):
+def load_cdd_historical(year, data_dir):
     """Load historical gridMET CDD increments and return cumulative CDD by DOY.
 
     Args:
         year: Integer year.
-        output_dir: Directory containing gridmet_cdd_{year}.npz.
+        data_dir: Directory containing gridmet_cdd_{year}.npz.
 
     Returns:
         Dict with keys doys (n,), cdd_cumulative (n, h, w), transform (6-element array).
         Returns None if the file does not exist.
     """
-    path = os.path.join(output_dir, f'gridmet_cdd_{year}.npz')
+    path = os.path.join(data_dir, f'gridmet_cdd_{year}.npz')
     if not os.path.exists(path):
         return None
     data = np.load(path, allow_pickle=True)
@@ -347,7 +347,7 @@ def tmean_at_latlon(cdd_data, target_doy, lat_vals, lon_vals):
 CDD_STATE_ROLLING_DAYS = 220
 
 
-def update_cdd_state(year, route_buffer, output_dir):
+def update_cdd_state(year, route_buffer, data_dir):
     """Incrementally update the current-year CDD/T_mean state file.
 
     cdd_state_{year}.npz stores a per-DOY series spanning the whole monitoring
@@ -366,12 +366,12 @@ def update_cdd_state(year, route_buffer, output_dir):
     Args:
         year: Integer year.
         route_buffer: GEE Geometry for the AT corridor.
-        output_dir: Directory to read/write cdd_state_{year}.npz.
+        data_dir: Directory to read/write cdd_state_{year}.npz.
 
     Returns:
         Path to cdd_state_{year}.npz.
     """
-    state_path = os.path.join(output_dir, f'cdd_state_{year}.npz')
+    state_path = os.path.join(data_dir, f'cdd_state_{year}.npz')
     aug1_doy   = _aug1_doy(year)
     today      = datetime.date.today()
     today_doy  = today.timetuple().tm_yday
@@ -427,7 +427,7 @@ def update_cdd_state(year, route_buffer, output_dir):
     end_date   = min(yesterday, datetime.date(year, 12, 31))
 
     print(f'  Downloading new gridMET data ({start_date} – {end_date})...')
-    result = _download_gridmet_range(start_date, end_date, route_buffer, output_dir, 'upd')
+    result = _download_gridmet_range(start_date, end_date, route_buffer, data_dir, 'upd')
 
     if result is None:
         print('  No new gridMET data available yet.')

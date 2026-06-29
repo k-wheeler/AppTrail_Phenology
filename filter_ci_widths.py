@@ -5,11 +5,11 @@ import rasterio
 from constants import NODATA, MAX_CI_WIDTH
 
 
-def load_ci_widths(output_dir, years):
+def load_ci_widths(greendown_dir, years):
     """Load CI width GeoTIFFs for all years and phases.
 
     Args:
-        output_dir: Path to directory containing CI width GeoTIFFs.
+        greendown_dir: Path to directory containing CI width GeoTIFFs.
         years: Iterable of integer years to load.
 
     Returns:
@@ -21,7 +21,7 @@ def load_ci_widths(output_dir, years):
     for year in years:
         year_widths = {}
         for phase in phases:
-            path = os.path.join(output_dir, f'greendown_{phase}_ci_width_{year}.tif')
+            path = os.path.join(greendown_dir, f'greendown_{phase}_ci_width_{year}.tif')
             if not os.path.exists(path):
                 year_widths[phase] = None
             else:
@@ -33,20 +33,20 @@ def load_ci_widths(output_dir, years):
     return widths
 
 
-def count_narrow_ci_pixel_years(output_dir, years, max_width=MAX_CI_WIDTH):
+def count_narrow_ci_pixel_years(greendown_dir, years, max_width=MAX_CI_WIDTH):
     """Count pixel-year combinations where all three CI widths are < max_width days.
 
     Prints a per-year and aggregate summary.
 
     Args:
-        output_dir: Path to directory containing CI width GeoTIFFs.
+        greendown_dir: Path to directory containing CI width GeoTIFFs.
         years: Iterable of integer years to evaluate.
         max_width: CI width threshold in days. Defaults to MAX_CI_WIDTH.
 
     Returns:
         Integer count of qualifying pixel-year combinations.
     """
-    widths = load_ci_widths(output_dir, years)
+    widths = load_ci_widths(greendown_dir, years)
     phases = ('start', 'middle', 'end')
 
     phase_totals = {p: 0 for p in phases}

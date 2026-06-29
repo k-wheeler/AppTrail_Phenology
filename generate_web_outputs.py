@@ -2,7 +2,9 @@
 
 Usage:
     python generate_web_outputs.py \
-        --output-dir ./greendown_outputs \
+        --data-dir ./Data \
+        --greendown-dir ./Greendown_Outputs \
+        --model-dir ./Model_Outputs \
         --web-dir ./web_outputs
 
 Authenticates with GEE via the GEE_SERVICE_ACCOUNT_KEY environment variable
@@ -33,7 +35,7 @@ from pyproj import Transformer
 from rasterio.crs import CRS as RioCRS
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 
-from constants import OUTPUT_DIR, LABEL_COLORS, LABEL_ORDER
+from constants import DATA_DIR, GREENDOWN_DIR, MODEL_DIR, LABEL_COLORS, LABEL_ORDER
 
 # The site reports the prediction for "today" in US Eastern time (the trail's
 # local time zone); ZoneInfo handles the EDT/EST switch automatically.
@@ -173,11 +175,11 @@ def _render_avg_doy_png(tif_path, out_path, title, ref_transform, ref_crs,
     print(f'  Saved {legend_path}')
 
 
-def _ensure_avg_pngs(output_dir, web_dir, ref_transform, ref_crs):
+def _ensure_avg_pngs(greendown_dir, web_dir, ref_transform, ref_crs):
     """Generate average transition DOY PNGs if they don't already exist.
 
     Args:
-        output_dir: Directory containing greendown_*_avg.tif files.
+        greendown_dir: Directory containing greendown_*_avg.tif files.
         web_dir: Directory to write output PNGs.
         ref_transform: Affine transform of the prediction raster (used to
             georeference the avg tifs, which share the grid but are mislabeled).
@@ -189,7 +191,7 @@ def _ensure_avg_pngs(output_dir, web_dir, ref_transform, ref_crs):
         'end':    'Avg Greendown End',
     }
     for phase, title in phases.items():
-        tif_path = os.path.join(output_dir, f'greendown_{phase}_avg.tif')
+        tif_path = os.path.join(greendown_dir, f'greendown_{phase}_avg.tif')
         out_path = os.path.join(web_dir, f'avg_{phase}.png')
         if not os.path.exists(tif_path):
             print(f'  Skipping avg {phase} PNG — GeoTIFF not found.')
@@ -239,9 +241,9 @@ _FEAT_DISPLAY_NAMES = {
 }
 
 
-def _generate_feature_importance_png(output_dir, web_dir):
+def _generate_feature_importance_png(model_dir, web_dir):
     """Save a horizontal bar chart of decision-tree feature importances to web_dir."""
-    model_path = os.path.join(output_dir, 'decision_tree_model.joblib')
+    model_path = os.path.join(model_dir, 'decision_tree_model.joblib')
     if not os.path.exists(model_path):
         print('  Skipping feature importance chart — model not found.')
         return
@@ -746,8 +748,10 @@ h1{{color:#2c6b3f;}}</style></head>
 
 def main():
     parser = argparse.ArgumentParser(description='Generate static phenology web outputs.')
-    parser.add_argument('--output-dir', default='./greendown_outputs')
-    parser.add_argument('--web-dir',    default='./web_outputs')
+    parser.add_argument('--data-dir',      default=DATA_DIR)
+    parser.add_argument('--greendown-dir', default=GREENDOWN_DIR)
+    parser.add_argument('--model-dir',     default=MODEL_DIR)
+    parser.add_argument('--web-dir',       default='./web_outputs')
     args = parser.parse_args()
 
     os.makedirs(args.web_dir, exist_ok=True)
@@ -795,11 +799,11 @@ def main():
     # Update rolling pixel state with any new images
     print(f'\nUpdating pixel state for {year}...')
     state_path = update_pixel_state(collection, ma_forest, route_buffer,
-                                    year, args.output_dir)
+                                    year, args.data_dir)
 
     # Update accumulated CDD from gridMET (incremental; safe to rerun multiple times/day)
     print(f'\nUpdating CDD state for {year}...')
-    update_cdd_state(year, route_buffer, args.output_dir)
+    update_cdd_state(year, route_buffer, args.data_dir)
 
     # If no satellite data exists yet for this season, write a placeholder
     if not os.path.exists(state_path):
@@ -813,7 +817,9 @@ def main():
     print(f'\nRunning prediction for {today_str}...')
     (pred_grid, forest_mask, transform, crs,
      feature_grids, recent_info) = predict_from_pixel_state(
-        state_path, today_str, args.output_dir, return_features=True
+        state_path, today_str,
+        data_dir=args.data_dir, greendown_dir=args.greendown_dir,
+        model_dir=args.model_dir, return_features=True
     )
 
     # Predicted labels are no longer persisted: mode_label_7day is recomputed each
@@ -839,7 +845,10 @@ def main():
 
     # Run RNN prediction (requires rnn_model.pt in output_dir)
     print(f'\nRunning RNN prediction for {today_str}...')
-    rnn_result = predict_rnn_from_pixel_state(state_path, today_str, args.output_dir)
+    rnn_result = predict_rnn_from_pixel_state(state_path, today_str,
+                                               data_dir=args.data_dir,
+                                               greendown_dir=args.greendown_dir,
+                                               model_dir=args.model_dir)
     has_rnn = rnn_result is not None
     pred_grid_rnn = None
     areas_rnn = {}
@@ -879,7 +888,7 @@ def main():
     # indices apply directly.
     _avg_arrays = {}
     for _phase in ('start', 'middle', 'end'):
-        _tif = os.path.join(args.output_dir, f'greendown_{_phase}_avg.tif')
+        _tif = os.path.join(args.greendown_dir, f'greendown_{_phase}_avg.tif')
         if os.path.exists(_tif):
             with rasterio.open(_tif) as _src:
                 _arr = _src.read(1).astype(float)
@@ -921,11 +930,11 @@ def main():
 
     # Generate average transition DOY maps (warped to match the prediction grid)
     print('\nChecking average transition DOY maps...')
-    _ensure_avg_pngs(args.output_dir, args.web_dir, transform, crs)
+    _ensure_avg_pngs(args.greendown_dir, args.web_dir, transform, crs)
 
     # Render feature importance chart for the About tab
     print('\nGenerating feature importance chart...')
-    _generate_feature_importance_png(args.output_dir, args.web_dir)
+    _generate_feature_importance_png(args.model_dir, args.web_dir)
 
     # Render HTML
     print('\nRendering index.html...')

@@ -1,27 +1,30 @@
 # Large data files — never commit these
-greendown_outputs/hls_indices_stack_*.npy
-greendown_outputs/hls_indices_doys_*.npy
-greendown_outputs/hls_indices_ref_2*.tif
-greendown_outputs/greendown_start_2*.tif
-greendown_outputs/greendown_middle_2*.tif
-greendown_outputs/greendown_end_2*.tif
-greendown_outputs/greendown_*_ci_lower_*.tif
-greendown_outputs/greendown_*_ci_upper_*.tif
-greendown_outputs/greendown_*_ci_width_*.tif
+Data/hls_indices_stack_*.npy
+Data/hls_indices_doys_*.npy
+Data/hls_indices_ref_2*.tif
+Greendown_Outputs/greendown_start_2*.tif
+Greendown_Outputs/greendown_middle_2*.tif
+Greendown_Outputs/greendown_end_2*.tif
+Greendown_Outputs/greendown_*_ci_lower_*.tif
+Greendown_Outputs/greendown_*_ci_upper_*.tif
+Greendown_Outputs/greendown_*_ci_width_*.tif
 
 # Keep these small committed files
-!greendown_outputs/hls_indices_ref_current.tif
-!greendown_outputs/greendown_start_avg.tif
-!greendown_outputs/greendown_middle_avg.tif
-!greendown_outputs/greendown_end_avg.tif
-!greendown_outputs/greendown_middle_avg_filtered.tif
-!greendown_outputs/greendown_avg_meta.json
-!greendown_outputs/norm_stats.json
-!greendown_outputs/decision_tree_model.joblib
-!greendown_outputs/rnn_model.pt
-!greendown_outputs/rnn_norm_stats.json
-!greendown_outputs/rnn_model_config.json
-!greendown_outputs/pixel_state_*.npz
+!Data/hls_indices_ref_current.tif
+!Data/pixel_state_*.npz
+!Data/cdd_state_*.npz
+!Greendown_Outputs/greendown_start_avg.tif
+!Greendown_Outputs/greendown_middle_avg.tif
+!Greendown_Outputs/greendown_end_avg.tif
+!Greendown_Outputs/greendown_middle_avg_filtered.tif
+!Greendown_Outputs/greendown_avg_meta.json
+!Model_Outputs/norm_stats.json
+!Model_Outputs/decision_tree_model.joblib
+!Model_Outputs/rnn_model.pt
+!Model_Outputs/rnn_norm_stats.json
+!Model_Outputs/rnn_model_config.json
+!Model_Outputs/decision_tree.png
+!Model_Outputs/feature_importances.png
 
 # Python
 __pycache__/

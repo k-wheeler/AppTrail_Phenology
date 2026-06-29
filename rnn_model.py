@@ -337,17 +337,17 @@ def evaluate_rnn(model, sequences, device='cpu', batch_size=64):
 # Persistence
 # ---------------------------------------------------------------------------
 
-def save_rnn_model(model, norm_stats, output_dir):
+def save_rnn_model(model, norm_stats, model_dir):
     """Save model weights, norm stats, and architecture config.
 
-    Writes three files to output_dir:
+    Writes three files to model_dir:
         rnn_model.pt          — PyTorch state dict
         rnn_norm_stats.json   — per-feature mean/std
         rnn_model_config.json — architecture params for load_rnn_model
     """
-    os.makedirs(output_dir, exist_ok=True)
-    torch.save(model.state_dict(), os.path.join(output_dir, 'rnn_model.pt'))
-    with open(os.path.join(output_dir, 'rnn_norm_stats.json'), 'w') as f:
+    os.makedirs(model_dir, exist_ok=True)
+    torch.save(model.state_dict(), os.path.join(model_dir, 'rnn_model.pt'))
+    with open(os.path.join(model_dir, 'rnn_norm_stats.json'), 'w') as f:
         json.dump(norm_stats, f, indent=2)
     config = {
         'input_size':  model.lstm.input_size,
@@ -355,24 +355,24 @@ def save_rnn_model(model, norm_stats, output_dir):
         'num_layers':  model.num_layers,
         'num_classes': model.head.out_features,
     }
-    with open(os.path.join(output_dir, 'rnn_model_config.json'), 'w') as f:
+    with open(os.path.join(model_dir, 'rnn_model_config.json'), 'w') as f:
         json.dump(config, f, indent=2)
-    print(f'  Saved rnn_model.pt + rnn_norm_stats.json + rnn_model_config.json → {output_dir}')
+    print(f'  Saved rnn_model.pt + rnn_norm_stats.json + rnn_model_config.json → {model_dir}')
 
 
-def load_rnn_model(output_dir):
-    """Load RNN model and norm stats from output_dir.
+def load_rnn_model(model_dir):
+    """Load RNN model and norm stats from model_dir.
 
     Returns:
         (model, norm_stats): RNNPhenologyModel in eval mode, norm stats dict.
     """
-    with open(os.path.join(output_dir, 'rnn_model_config.json')) as f:
+    with open(os.path.join(model_dir, 'rnn_model_config.json')) as f:
         config = json.load(f)
     model = RNNPhenologyModel(**config)
     model.load_state_dict(
-        torch.load(os.path.join(output_dir, 'rnn_model.pt'), map_location='cpu'))
+        torch.load(os.path.join(model_dir, 'rnn_model.pt'), map_location='cpu'))
     model.eval()
-    with open(os.path.join(output_dir, 'rnn_norm_stats.json')) as f:
+    with open(os.path.join(model_dir, 'rnn_norm_stats.json')) as f:
         norm_stats = json.load(f)
     return model, norm_stats
 
@@ -381,7 +381,8 @@ def load_rnn_model(output_dir):
 # Serving: predict from rolling pixel state
 # ---------------------------------------------------------------------------
 
-def predict_rnn_from_pixel_state(state_path, date_str, output_dir):
+def predict_rnn_from_pixel_state(state_path, date_str, data_dir=None,
+                                  greendown_dir=None, model_dir=None):
     """Predict phenological state using the trained LSTM and rolling pixel state.
 
     Assembles per-pixel observation sequences (oldest→newest) from the stored
@@ -390,11 +391,12 @@ def predict_rnn_from_pixel_state(state_path, date_str, output_dir):
     The prediction at the final (most recent) time step is used.
 
     Args:
-        state_path: Path to pixel_state_{year}.npz.
-        date_str:   ISO date string, e.g. '2026-09-15'.
-        output_dir: Directory with rnn_model.pt, rnn_norm_stats.json,
-                    rnn_model_config.json, cdd_state_{year}.npz (optional),
-                    and spatial reference GeoTIFFs.
+        state_path:    Path to pixel_state_{year}.npz.
+        date_str:      ISO date string, e.g. '2026-09-15'.
+        data_dir:      Directory with reference GeoTIFFs and cdd_state_{year}.npz.
+        greendown_dir: Directory with transition GeoTIFFs and avg assets.
+        model_dir:     Directory with rnn_model.pt, rnn_norm_stats.json,
+                       and rnn_model_config.json.
 
     Returns:
         (pred_grid, forest_mask, transform, crs) where pred_grid is an (h, w)
@@ -409,12 +411,19 @@ def predict_rnn_from_pixel_state(state_path, date_str, output_dir):
         _load_lat_lon_arrays,
     )
     from gridmet_utils import load_cdd_state, cdd_state_tmean_at_doys
+    from constants import DATA_DIR, GREENDOWN_DIR, MODEL_DIR
+    if data_dir is None:
+        data_dir = DATA_DIR
+    if greendown_dir is None:
+        greendown_dir = GREENDOWN_DIR
+    if model_dir is None:
+        model_dir = MODEL_DIR
 
-    if not os.path.exists(os.path.join(output_dir, 'rnn_model.pt')):
+    if not os.path.exists(os.path.join(model_dir, 'rnn_model.pt')):
         print('  RNN model not found — skipping RNN prediction.')
         return None
 
-    model, norm_stats = load_rnn_model(output_dir)
+    model, norm_stats = load_rnn_model(model_dir)
     norm_mean = np.array([norm_stats[c]['mean'] for c in RNN_FEATURE_COLS], dtype=np.float32)
     norm_std  = np.array([norm_stats[c]['std']  for c in RNN_FEATURE_COLS], dtype=np.float32)
 
@@ -438,20 +447,20 @@ def predict_rnn_from_pixel_state(state_path, date_str, output_dir):
             ndvi_w[:, :, k] = raw.get(f'ndvi_{k}', np.full((h, w), np.nan))
             doy_w[:, :, k]  = raw.get(f'doy_{k}', np.full((h, w), np.nan))
 
-    ref_path = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
+    ref_path = os.path.join(data_dir, f'hls_indices_ref_{year}.tif')
     if not os.path.exists(ref_path):
-        ref_path = os.path.join(output_dir, 'hls_indices_ref_current.tif')
+        ref_path = os.path.join(data_dir, 'hls_indices_ref_current.tif')
     with rasterio.open(ref_path) as src:
         transform = src.transform
         crs       = src.crs
 
-    lat_array, lon_array = _load_lat_lon_arrays(output_dir, year)
-    cross_year_lookup    = _build_cross_year_transition_lookup(output_dir)
-    global_avg_middle    = _load_global_avg_middle(output_dir)
-    avg_middle           = _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w,
+    lat_array, lon_array = _load_lat_lon_arrays(data_dir, year)
+    cross_year_lookup    = _build_cross_year_transition_lookup(greendown_dir)
+    global_avg_middle    = _load_global_avg_middle(greendown_dir)
+    avg_middle           = _per_pixel_avg_middle(cross_year_lookup, greendown_dir, h, w,
                                                   exclude_year=year)
 
-    cdd_state_path = os.path.join(output_dir, f'cdd_state_{year}.npz')
+    cdd_state_path = os.path.join(data_dir, f'cdd_state_{year}.npz')
     cdd_state = load_cdd_state(cdd_state_path) if os.path.exists(cdd_state_path) else None
 
     forest_mask = np.isfinite(evi_w[:, :, 0]) & (evi_w[:, :, 0] > 0)

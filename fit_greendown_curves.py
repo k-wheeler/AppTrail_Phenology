@@ -183,7 +183,7 @@ def compute_transition_dates_ci(popt, pcov):
 # Export helpers
 # ----------------------------
 
-def _export_stack(collection, ma_forest, route_buffer, year, output_dir):
+def _export_stack(collection, ma_forest, route_buffer, year, data_dir):
     """Export EVI and NDVI images from GEE and stack into a numpy array.
 
     Exports one image at a time (~20 MB each, under the 50 MB limit) and
@@ -194,16 +194,16 @@ def _export_stack(collection, ma_forest, route_buffer, year, output_dir):
         ma_forest: GEE Image binary forest mask.
         route_buffer: GEE Geometry defining the export region.
         year: Integer year being exported.
-        output_dir: Directory to write cached stack files.
+        data_dir: Directory to write cached stack files.
 
     Returns:
         Tuple of (stack, doys, ref_path) where stack is array of shape
         (n_images, 2, h, w), doys is a 1D DOY array, and ref_path is the
         path to the single-band reference GeoTIFF.
     """
-    stack_path = os.path.join(output_dir, f'hls_indices_stack_{year}.npy')
-    doys_path  = os.path.join(output_dir, f'hls_indices_doys_{year}.npy')
-    ref_path   = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
+    stack_path = os.path.join(data_dir, f'hls_indices_stack_{year}.npy')
+    doys_path  = os.path.join(data_dir, f'hls_indices_doys_{year}.npy')
+    ref_path   = os.path.join(data_dir, f'hls_indices_ref_{year}.tif')
 
     if os.path.exists(stack_path) and os.path.exists(doys_path):
         print(f'  Loading cached stack for {year}')
@@ -226,7 +226,7 @@ def _export_stack(collection, ma_forest, route_buffer, year, output_dir):
     print(f'  Exporting {n} images for {year} (one at a time)...')
     for i in range(n):
         img = ee.Image(image_list.get(i)).select(['EVI', 'NDVI']).updateMask(ma_forest)
-        tmp_path = os.path.join(output_dir, f'_tmp_{year}_{i:03d}.tif')
+        tmp_path = os.path.join(data_dir, f'_tmp_{year}_{i:03d}.tif')
 
         for attempt in range(3):
             geemap.ee_export_image(
@@ -270,7 +270,8 @@ def _export_stack(collection, ma_forest, route_buffer, year, output_dir):
 # Per-year fitting
 # ----------------------------
 
-def compute_transition_dates(hls_indices_collection, route_buffer, ma_forest, year, output_dir='.'):
+def compute_transition_dates(hls_indices_collection, route_buffer, ma_forest, year,
+                             data_dir='.', greendown_dir='.'):
     """Fit greendown curves and save transition date GeoTIFFs for one year.
 
     Exports Jul–Dec EVI and NDVI per image from GEE, fits a decreasing logistic
@@ -287,16 +288,17 @@ def compute_transition_dates(hls_indices_collection, route_buffer, ma_forest, ye
         route_buffer: GEE Geometry defining the spatial extent.
         ma_forest: GEE Image binary forest mask.
         year: Integer year to process.
-        output_dir: Directory for cached stacks and output GeoTIFFs.
+        data_dir: Directory for cached stacks and reference GeoTIFFs.
+        greendown_dir: Directory for output transition GeoTIFFs.
 
     Returns:
         Dict of {'start': path, 'middle': path, 'end': path} for point estimates.
     """
     phases = ('start', 'middle', 'end')
-    point_paths = {p: os.path.join(output_dir, f'greendown_{p}_{year}.tif')          for p in phases}
-    lower_paths = {p: os.path.join(output_dir, f'greendown_{p}_ci_lower_{year}.tif') for p in phases}
-    upper_paths = {p: os.path.join(output_dir, f'greendown_{p}_ci_upper_{year}.tif') for p in phases}
-    width_paths = {p: os.path.join(output_dir, f'greendown_{p}_ci_width_{year}.tif') for p in phases}
+    point_paths = {p: os.path.join(greendown_dir, f'greendown_{p}_{year}.tif')          for p in phases}
+    lower_paths = {p: os.path.join(greendown_dir, f'greendown_{p}_ci_lower_{year}.tif') for p in phases}
+    upper_paths = {p: os.path.join(greendown_dir, f'greendown_{p}_ci_upper_{year}.tif') for p in phases}
+    width_paths = {p: os.path.join(greendown_dir, f'greendown_{p}_ci_width_{year}.tif') for p in phases}
 
     all_paths = (list(point_paths.values()) + list(lower_paths.values()) +
                  list(upper_paths.values()) + list(width_paths.values()))
@@ -305,7 +307,7 @@ def compute_transition_dates(hls_indices_collection, route_buffer, ma_forest, ye
         return point_paths
 
     collection = hls_indices_collection.sort('system:time_start')
-    arr, doys, ref_path = _export_stack(collection, ma_forest, route_buffer, year, output_dir)
+    arr, doys, ref_path = _export_stack(collection, ma_forest, route_buffer, year, data_dir)
 
     _, _, h, w = arr.shape
     results = {
@@ -393,7 +395,7 @@ def _seed_window(state, prefix, h, w):
     return win
 
 
-def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
+def update_pixel_state(collection, ma_forest, route_buffer, year, data_dir):
     """Download new HLS images and update the compact rolling pixel state file.
 
     The pixel state stores the 3 most recent valid EVI/NDVI observations per
@@ -406,14 +408,14 @@ def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
         ma_forest: GEE Image binary forest mask.
         route_buffer: GEE Geometry defining the export region.
         year: Integer year being processed.
-        output_dir: Directory to read/write pixel_state_{year}.npz and the
+        data_dir: Directory to read/write pixel_state_{year}.npz and the
             reference GeoTIFF hls_indices_ref_{year}.tif.
 
     Returns:
         Path to the updated pixel_state_{year}.npz file.
     """
-    state_path = os.path.join(output_dir, f'pixel_state_{year}.npz')
-    ref_path   = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
+    state_path = os.path.join(data_dir, f'pixel_state_{year}.npz')
+    ref_path   = os.path.join(data_dir, f'hls_indices_ref_{year}.tif')
 
     # Load existing state or initialise blank arrays once we know (h, w)
     existing_doys = set()
@@ -461,7 +463,7 @@ def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
     for idx in new_indices:
         doy = all_doys[idx]
         img = ee.Image(image_list.get(idx)).select(['EVI', 'NDVI']).updateMask(ma_forest)
-        tmp_path = os.path.join(output_dir, f'_tmp_state_{year}_{idx:03d}.tif')
+        tmp_path = os.path.join(data_dir, f'_tmp_state_{year}_{idx:03d}.tif')
 
         for attempt in range(3):
             geemap.ee_export_image(img, filename=tmp_path, scale=30,
@@ -497,7 +499,7 @@ def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
                 ref_profile.update(count=1)
                 with rasterio.open(ref_path, 'w', **ref_profile) as dst:
                     dst.write(src.read(1), 1)
-            current_ref = os.path.join(output_dir, 'hls_indices_ref_current.tif')
+            current_ref = os.path.join(data_dir, 'hls_indices_ref_current.tif')
             if not os.path.exists(current_ref):
                 import shutil
                 shutil.copy2(ref_path, current_ref)
@@ -536,7 +538,7 @@ def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
     return state_path
 
 
-def _canonical_crs(output_dir):
+def _canonical_crs(data_dir):
     """Return the authoritative CRS from a reference raster, or None.
 
     Guards against transition GeoTIFFs that may carry a mislabeled CRS by
@@ -544,13 +546,13 @@ def _canonical_crs(output_dir):
     directly from the GEE download.
 
     Args:
-        output_dir: Directory containing hls_indices_ref_*.tif.
+        data_dir: Directory containing hls_indices_ref_*.tif.
 
     Returns:
         A rasterio CRS, or None if no reference raster is found.
     """
-    candidates = [os.path.join(output_dir, 'hls_indices_ref_current.tif')]
-    candidates += sorted(glob.glob(os.path.join(output_dir, 'hls_indices_ref_*.tif')))
+    candidates = [os.path.join(data_dir, 'hls_indices_ref_current.tif')]
+    candidates += sorted(glob.glob(os.path.join(data_dir, 'hls_indices_ref_*.tif')))
     for path in candidates:
         if os.path.exists(path):
             with rasterio.open(path) as src:
@@ -559,18 +561,19 @@ def _canonical_crs(output_dir):
     return None
 
 
-def compute_average_transition_dates(paths_by_year, output_dir='.'):
+def compute_average_transition_dates(paths_by_year, data_dir='.', greendown_dir='.'):
     """Compute pixel-wise mean transition DOYs across years.
 
     Args:
         paths_by_year: List of dicts returned by compute_transition_dates,
             one per year.
-        output_dir: Directory to write the averaged GeoTIFFs.
+        data_dir: Directory containing reference GeoTIFFs for CRS lookup.
+        greendown_dir: Directory to write the averaged GeoTIFFs.
 
     Returns:
         Dict of {'start': path, 'middle': path, 'end': path} for averaged rasters.
     """
-    ref_crs = _canonical_crs(output_dir)
+    ref_crs = _canonical_crs(data_dir)
     avg_paths = {}
     for phase in ('start', 'middle', 'end'):
         arrays  = []
@@ -593,7 +596,7 @@ def compute_average_transition_dates(paths_by_year, output_dir='.'):
         if ref_crs is not None:
             profile.update(crs=ref_crs)
 
-        path = os.path.join(output_dir, f'greendown_{phase}_avg.tif')
+        path = os.path.join(greendown_dir, f'greendown_{phase}_avg.tif')
         with rasterio.open(path, 'w', **profile) as dst:
             dst.write(mean, 1)
         avg_paths[phase] = path

@@ -17,7 +17,7 @@ from gridmet_utils import (
     cdd_from_state, tmean_from_state,
     load_cdd_state, cdd_state_cum_at_doys, cdd_state_tmean_at_doys,
 )
-from constants import NODATA
+from constants import NODATA, DATA_DIR, GREENDOWN_DIR, MODEL_DIR
 
 PRED_YEAR = datetime.date.today().year
 FEATURE_COLS = ['EVI', 'NDVI', 'evi_delta', 'evi_delta2',
@@ -99,7 +99,7 @@ def _forward_mode(labels_slot, doy_w, slot_valid, k, obs_doy_k):
     return np.where(has, np.argmax(counts, axis=1), 0).astype(float)
 
 
-def _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w, exclude_year=None):
+def _per_pixel_avg_middle(cross_year_lookup, greendown_dir, h, w, exclude_year=None):
     """Average middle-transition DOY per pixel across historical years.
 
     Mirrors the cross-year averaging used when building the training table
@@ -116,7 +116,7 @@ def _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w, exclude_year=None
     Args:
         cross_year_lookup: Dict {year: {phase: array(h, w)}} from
             _build_cross_year_transition_lookup.
-        output_dir: Directory containing greendown_middle_avg.tif (fallback).
+        greendown_dir: Directory containing greendown_middle_avg_filtered.tif (fallback).
         h: Raster height in pixels.
         w: Raster width in pixels.
         exclude_year: Year to omit from the average (the prediction year).
@@ -136,7 +136,7 @@ def _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w, exclude_year=None
     # This is precomputed by build_data_table.export_prediction_avg_assets and
     # matches the per-pixel average used during training (NOT greendown_middle_avg.tif,
     # which is an unfiltered mean and differs by ~14 days).
-    avg_path = os.path.join(output_dir, 'greendown_middle_avg_filtered.tif')
+    avg_path = os.path.join(greendown_dir, 'greendown_middle_avg_filtered.tif')
     if os.path.exists(avg_path):
         with rasterio.open(avg_path) as src:
             avg = src.read(1).astype(float)
@@ -149,7 +149,7 @@ def _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w, exclude_year=None
     return np.full((h, w), np.nan)
 
 
-def _load_global_avg_middle(output_dir):
+def _load_global_avg_middle(greendown_dir):
     """Global gap-fill middle-transition DOY, with a committed fallback.
 
     Prefers the live computation from per-year CI GeoTIFFs; if those are absent
@@ -157,22 +157,23 @@ def _load_global_avg_middle(output_dir):
     greendown_avg_meta.json written by export_prediction_avg_assets.
 
     Args:
-        output_dir: Path to greendown_outputs.
+        greendown_dir: Path to Greendown_Outputs.
 
     Returns:
         Global average middle-transition DOY as a float, or NaN if unavailable.
     """
-    val = _compute_global_avg_middle(output_dir)
+    val = _compute_global_avg_middle(greendown_dir)
     if not np.isnan(val):
         return val
-    meta_path = os.path.join(output_dir, 'greendown_avg_meta.json')
+    meta_path = os.path.join(greendown_dir, 'greendown_avg_meta.json')
     if os.path.exists(meta_path):
         with open(meta_path) as f:
             return float(json.load(f).get('global_avg_middle', np.nan))
     return val
 
 
-def predict_phenology(date_str, output_dir):
+def predict_phenology(date_str, data_dir=DATA_DIR, greendown_dir=GREENDOWN_DIR,
+                      model_dir=MODEL_DIR):
     """Predict phenological state for every pixel on a given 2025 date.
 
     Uses the most recent valid EVI/NDVI observation at or before the target date.
@@ -180,8 +181,9 @@ def predict_phenology(date_str, output_dir):
 
     Args:
         date_str: ISO-format date string, e.g. '2025-09-15'.
-        output_dir: Path to greendown_outputs directory containing the 2025 stack,
-            saved model, and norm_stats.json.
+        data_dir: Directory containing the yearly HLS stacks and reference GeoTIFFs.
+        greendown_dir: Directory containing transition GeoTIFFs and avg assets.
+        model_dir: Directory containing decision_tree_model.joblib and norm_stats.json.
 
     Returns:
         Tuple of (pred_grid, forest_mask, transform, crs) where:
@@ -197,28 +199,28 @@ def predict_phenology(date_str, output_dir):
     target_doy = date.timetuple().tm_yday
 
     # Load 2025 EVI/NDVI stack (mmap to avoid loading ~2.5 GB into RAM)
-    stack = np.load(os.path.join(output_dir, f'hls_indices_stack_{PRED_YEAR}.npy'), mmap_mode='r')
-    doys  = np.load(os.path.join(output_dir, f'hls_indices_doys_{PRED_YEAR}.npy'))
+    stack = np.load(os.path.join(data_dir, f'hls_indices_stack_{PRED_YEAR}.npy'), mmap_mode='r')
+    doys  = np.load(os.path.join(data_dir, f'hls_indices_doys_{PRED_YEAR}.npy'))
     n_imgs, _, h, w = stack.shape
 
     # Load saved model and normalization statistics
-    mdl = joblib.load(os.path.join(output_dir, 'decision_tree_model.joblib'))
-    with open(os.path.join(output_dir, 'norm_stats.json')) as f:
+    mdl = joblib.load(os.path.join(model_dir, 'decision_tree_model.joblib'))
+    with open(os.path.join(model_dir, 'norm_stats.json')) as f:
         norm_stats = json.load(f)
 
     # Spatial metadata for mapping
-    ref_path = os.path.join(output_dir, f'hls_indices_ref_{PRED_YEAR}.tif')
+    ref_path = os.path.join(data_dir, f'hls_indices_ref_{PRED_YEAR}.tif')
     if not os.path.exists(ref_path):
-        ref_path = os.path.join(output_dir, 'hls_indices_ref_current.tif')
+        ref_path = os.path.join(data_dir, 'hls_indices_ref_current.tif')
     with rasterio.open(ref_path) as src:
         transform = src.transform
         crs       = src.crs
 
-    lat_array, lon_array = _load_lat_lon_arrays(output_dir, PRED_YEAR)
+    lat_array, lon_array = _load_lat_lon_arrays(data_dir, PRED_YEAR)
 
     # Cross-year middle transition DOY lookup (excludes 2025 automatically)
-    cross_year_lookup = _build_cross_year_transition_lookup(output_dir)
-    global_avg_middle = _load_global_avg_middle(output_dir)
+    cross_year_lookup = _build_cross_year_transition_lookup(greendown_dir)
+    global_avg_middle = _load_global_avg_middle(greendown_dir)
 
     # Indices of images at or before target_doy, sorted newest-first
     valid_t = np.where(doys <= target_doy)[0]
@@ -278,7 +280,7 @@ def predict_phenology(date_str, output_dir):
 
     # doy_minus_avg_middle: per-pixel average of the middle-transition DOY
     # across historical years, gap-filled with the global average.
-    avg_middle = _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w,
+    avg_middle = _per_pixel_avg_middle(cross_year_lookup, greendown_dir, h, w,
                                        exclude_year=PRED_YEAR)
     doy_minus = np.where(np.isfinite(avg_middle[r, c]),
                          target_doy - avg_middle[r, c], np.nan)
@@ -320,7 +322,8 @@ def predict_phenology(date_str, output_dir):
     return pred_grid, forest_mask, transform, crs
 
 
-def predict_from_pixel_state(state_path, date_str, output_dir,
+def predict_from_pixel_state(state_path, date_str, data_dir=DATA_DIR,
+                              greendown_dir=GREENDOWN_DIR, model_dir=MODEL_DIR,
                               return_features=False):
     """Predict phenological state using the compact rolling pixel state file.
 
@@ -337,8 +340,9 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
         state_path: Path to pixel_state_{year}.npz containing per-pixel arrays
             evi_w/ndvi_w/doy_w (h, w, OBS_WINDOW; slot 0 = most recent valid obs).
         date_str: ISO-format date string, e.g. '2026-09-15'.
-        output_dir: Path to greendown_outputs directory containing
-            norm_stats.json, decision_tree_model.joblib, and transition GeoTIFFs.
+        data_dir: Directory containing reference GeoTIFFs.
+        greendown_dir: Directory containing transition GeoTIFFs and avg assets.
+        model_dir: Directory containing decision_tree_model.joblib and norm_stats.json.
         return_features: If True, return raw (pre-normalization) feature grids
             and the re-predicted recent-observation history as extra values.
 
@@ -372,27 +376,27 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
             doy_w[:, :, k]  = state[f'doy_{k}'].astype(float)
     N = evi_w.shape[2]
 
-    mdl = joblib.load(os.path.join(output_dir, 'decision_tree_model.joblib'))
-    with open(os.path.join(output_dir, 'norm_stats.json')) as f:
+    mdl = joblib.load(os.path.join(model_dir, 'decision_tree_model.joblib'))
+    with open(os.path.join(model_dir, 'norm_stats.json')) as f:
         norm_stats = json.load(f)
     norm_mean = np.array([norm_stats[col]['mean'] for col in FEATURE_COLS])
     norm_std  = np.array([norm_stats[col]['std']  for col in FEATURE_COLS])
 
     # Use current-year ref raster if available; fall back to stable copy
-    ref_path = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
+    ref_path = os.path.join(data_dir, f'hls_indices_ref_{year}.tif')
     if not os.path.exists(ref_path):
-        ref_path = os.path.join(output_dir, 'hls_indices_ref_current.tif')
+        ref_path = os.path.join(data_dir, 'hls_indices_ref_current.tif')
     with rasterio.open(ref_path) as src:
         transform = src.transform
         crs       = src.crs
 
-    lat_array, lon_array = _load_lat_lon_arrays(output_dir, year)
-    cross_year_lookup = _build_cross_year_transition_lookup(output_dir)
-    global_avg_middle = _load_global_avg_middle(output_dir)
-    avg_middle = _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w,
+    lat_array, lon_array = _load_lat_lon_arrays(data_dir, year)
+    cross_year_lookup = _build_cross_year_transition_lookup(greendown_dir)
+    global_avg_middle = _load_global_avg_middle(greendown_dir)
+    avg_middle = _per_pixel_avg_middle(cross_year_lookup, greendown_dir, h, w,
                                        exclude_year=year)
     # --- Temperature features disabled (see FEATURE_COLS). Re-enable together. ---
-    # cdd_state = load_cdd_state(os.path.join(output_dir, f'cdd_state_{year}.npz'))
+    # cdd_state = load_cdd_state(os.path.join(data_dir, f'cdd_state_{year}.npz'))
 
     # Forest mask: pixels with a valid most-recent observation (slot 0)
     forest_mask = np.isfinite(evi_w[:, :, 0]) & (evi_w[:, :, 0] > 0)

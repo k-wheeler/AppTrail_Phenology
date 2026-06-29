@@ -6,7 +6,7 @@ it to $GITHUB_STEP_SUMMARY so results appear in the Actions UI.
 Exits 1 if any check fails, which triggers a GitHub failure email.
 
 Usage:
-    python health_check.py [--output-dir ./greendown_outputs] [--web-dir ./web_outputs]
+    python health_check.py [--data-dir ./Data] [--web-dir ./web_outputs]
 """
 import argparse
 import datetime
@@ -120,9 +120,9 @@ def check_doy_minus_avg_middle(pixels):
     return _check('doy_minus_avg_middle not all null', True, f'{non_null}/{total} non-null')
 
 
-def check_pixel_state(output_dir, today, today_doy):
+def check_pixel_state(data_dir, today, today_doy):
     year = today.year
-    path = os.path.join(output_dir, f'pixel_state_{year}.npz')
+    path = os.path.join(data_dir, f'pixel_state_{year}.npz')
     if not os.path.exists(path):
         return [
             _check('Pixel state exists', False, f'pixel_state_{year}.npz not found'),
@@ -194,8 +194,8 @@ def build_markdown(checks, date_str):
 
 def main():
     parser = argparse.ArgumentParser(description='Daily pipeline health check.')
-    parser.add_argument('--output-dir', default='./greendown_outputs')
-    parser.add_argument('--web-dir', default='./web_outputs')
+    parser.add_argument('--data-dir', default='./Data')
+    parser.add_argument('--web-dir',  default='./web_outputs')
     args = parser.parse_args()
 
     today = datetime.date.today()
@@ -222,7 +222,7 @@ def main():
         checks.append(check_pixel_features_size(pixels, n_pixels))
         checks.append(check_predictions_non_degenerate(pixels))
         checks.append(check_doy_minus_avg_middle(pixels))
-        checks.extend(check_pixel_state(args.output_dir, today, today_doy))
+        checks.extend(check_pixel_state(args.data_dir, today, today_doy))
 
     md = build_markdown(checks, today_str)
     print(md)

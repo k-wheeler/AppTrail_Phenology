@@ -16,11 +16,11 @@ from gridmet_utils import load_cdd_historical, cdd_at_latlon, tmean_at_latlon
 _LABEL_ENC = {'before': 0, 'early': 1, 'late': 2, 'after': 3}
 
 
-def _build_cross_year_transition_lookup(output_dir):
+def _build_cross_year_transition_lookup(greendown_dir):
     """Load transition point estimates for all years, filtered by CI width.
 
     Args:
-        output_dir: Path to directory containing transition and CI width GeoTIFFs.
+        greendown_dir: Path to directory containing transition and CI width GeoTIFFs.
 
     Returns:
         Dict of {year: {phase: array(h,w)}} with DOY floats. Values are NaN
@@ -31,15 +31,15 @@ def _build_cross_year_transition_lookup(output_dir):
     pattern = re.compile(r'greendown_start_(\d{4})\.tif')
     available_years = sorted(
         int(m.group(1))
-        for p in glob.glob(os.path.join(output_dir, 'greendown_start_*.tif'))
+        for p in glob.glob(os.path.join(greendown_dir, 'greendown_start_*.tif'))
         if (m := pattern.search(os.path.basename(p)))
     )
 
     lookup = {}
     for year in available_years:
         required = (
-            [os.path.join(output_dir, f'greendown_{p}_{year}.tif') for p in phases] +
-            [os.path.join(output_dir, f'greendown_{p}_ci_width_{year}.tif') for p in phases]
+            [os.path.join(greendown_dir, f'greendown_{p}_{year}.tif') for p in phases] +
+            [os.path.join(greendown_dir, f'greendown_{p}_ci_width_{year}.tif') for p in phases]
         )
         if not all(os.path.exists(f) for f in required):
             continue
@@ -47,7 +47,7 @@ def _build_cross_year_transition_lookup(output_dir):
         # Build quality mask: all three CI widths must be finite and <= threshold
         ci_mask = None
         for phase in phases:
-            with rasterio.open(os.path.join(output_dir, f'greendown_{phase}_ci_width_{year}.tif')) as src:
+            with rasterio.open(os.path.join(greendown_dir, f'greendown_{phase}_ci_width_{year}.tif')) as src:
                 w = src.read(1).astype(float)
                 w[w == NODATA] = np.nan
             phase_ok = np.isfinite(w) & (w <= CROSS_YEAR_MAX_CI_WIDTH)
@@ -55,7 +55,7 @@ def _build_cross_year_transition_lookup(output_dir):
 
         year_data = {}
         for phase in phases:
-            with rasterio.open(os.path.join(output_dir, f'greendown_{phase}_{year}.tif')) as src:
+            with rasterio.open(os.path.join(greendown_dir, f'greendown_{phase}_{year}.tif')) as src:
                 d = src.read(1).astype(float)
                 d[d == NODATA] = np.nan
             d[~ci_mask] = np.nan
@@ -66,11 +66,11 @@ def _build_cross_year_transition_lookup(output_dir):
     return lookup
 
 
-def _load_point_estimates(output_dir, year):
+def _load_point_estimates(greendown_dir, year):
     """Load start/middle/end greendown transition point estimate arrays for one year.
 
     Args:
-        output_dir: Path to directory containing transition GeoTIFFs.
+        greendown_dir: Path to directory containing transition GeoTIFFs.
         year: Integer year to load.
 
     Returns:
@@ -78,7 +78,7 @@ def _load_point_estimates(output_dir, year):
     """
     points = {}
     for phase in ('start', 'middle', 'end'):
-        path = os.path.join(output_dir, f'greendown_{phase}_{year}.tif')
+        path = os.path.join(greendown_dir, f'greendown_{phase}_{year}.tif')
         with rasterio.open(path) as src:
             data = src.read(1).astype(float)
             data[data == NODATA] = np.nan
@@ -86,21 +86,21 @@ def _load_point_estimates(output_dir, year):
     return points
 
 
-def _load_lat_lon_arrays(output_dir, year):
+def _load_lat_lon_arrays(data_dir, year):
     """Build 2D arrays of WGS84 latitudes and longitudes for every pixel.
 
     Derives coordinates from the spatial transform and CRS of the reference GeoTIFF.
 
     Args:
-        output_dir: Path to directory containing the reference GeoTIFF.
+        data_dir: Path to directory containing the reference GeoTIFF.
         year: Integer year whose reference raster is used.
 
     Returns:
         Tuple (lat_array, lon_array), each shape (h, w), WGS84 decimal degrees.
     """
-    ref_path = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
+    ref_path = os.path.join(data_dir, f'hls_indices_ref_{year}.tif')
     if not os.path.exists(ref_path):
-        ref_path = os.path.join(output_dir, 'hls_indices_ref_current.tif')
+        ref_path = os.path.join(data_dir, 'hls_indices_ref_current.tif')
     with rasterio.open(ref_path) as src:
         h, w      = src.height, src.width
         transform = src.transform
@@ -115,17 +115,17 @@ def _load_lat_lon_arrays(output_dir, year):
     return np.array(lats).reshape(h, w), np.array(lons).reshape(h, w)
 
 
-def _load_lat_array(output_dir, year):
+def _load_lat_array(data_dir, year):
     """Build a 2D array of WGS84 latitudes for every pixel.
 
     Args:
-        output_dir: Path to directory containing the reference GeoTIFF.
+        data_dir: Path to directory containing the reference GeoTIFF.
         year: Integer year whose reference raster is used.
 
     Returns:
         Array of shape (h, w) with WGS84 latitude values.
     """
-    lat_array, _ = _load_lat_lon_arrays(output_dir, year)
+    lat_array, _ = _load_lat_lon_arrays(data_dir, year)
     return lat_array
 
 
@@ -200,7 +200,7 @@ def _add_mode_label_7day(df):
     return df
 
 
-def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH,
+def build_feature_table(data_dir, greendown_dir, years, max_width=MAX_CI_WIDTH,
                         retain_pixel_id=False, include_temperature=False):
     """Build a labeled feature table from EVI/NDVI time series for qualifying pixel-years.
 
@@ -208,7 +208,8 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH,
     each observation relative to the greendown transition point estimates.
 
     Args:
-        output_dir: Path to directory containing stacks, DOY arrays, and GeoTIFFs.
+        data_dir: Path to directory containing stacks, DOY arrays, and reference GeoTIFFs.
+        greendown_dir: Path to directory containing transition and CI width GeoTIFFs.
         years: List of integer years to process.
         max_width: Maximum CI width in days for a pixel-year to qualify.
         retain_pixel_id: If True, keep the pixel_id column in the returned DataFrame
@@ -222,8 +223,8 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH,
         doy_minus_avg_middle, doy_minus_avg_end, [cdd_accumulated, tmean_recent], label.
     """
     phases = ('start', 'middle', 'end')
-    widths = load_ci_widths(output_dir, years)
-    cross_year_lookup = _build_cross_year_transition_lookup(output_dir)
+    widths = load_ci_widths(greendown_dir, years)
+    cross_year_lookup = _build_cross_year_transition_lookup(greendown_dir)
     rows = []
 
     for year in years:
@@ -243,12 +244,12 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH,
             continue
 
         # Load EVI/NDVI stack (n_images, n_bands, h, w): band 0=EVI, band 1=NDVI
-        indices_stack = np.load(os.path.join(output_dir, f'hls_indices_stack_{year}.npy'))
-        doys          = np.load(os.path.join(output_dir, f'hls_indices_doys_{year}.npy'))
-        points        = _load_point_estimates(output_dir, year)
-        lat_array, lon_array = _load_lat_lon_arrays(output_dir, year)
+        indices_stack = np.load(os.path.join(data_dir, f'hls_indices_stack_{year}.npy'))
+        doys          = np.load(os.path.join(data_dir, f'hls_indices_doys_{year}.npy'))
+        points        = _load_point_estimates(greendown_dir, year)
+        lat_array, lon_array = _load_lat_lon_arrays(data_dir, year)
         if include_temperature:
-            cdd_hist = load_cdd_historical(year, output_dir)
+            cdd_hist = load_cdd_historical(year, data_dir)
 
         pixel_rows, pixel_cols = np.where(mask)
         print(f'  {year}: {len(pixel_rows)} qualifying pixels')
@@ -342,7 +343,7 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH,
     return df
 
 
-def export_prediction_avg_assets(output_dir):
+def export_prediction_avg_assets(data_dir, greendown_dir):
     """Write the committed assets the live prediction needs for doy_minus_avg_middle.
 
     The automated Action does not have the per-year transition GeoTIFFs (they are
@@ -360,15 +361,16 @@ def export_prediction_avg_assets(output_dir):
     re-fitting greendown curves), then commit the two output files.
 
     Args:
-        output_dir: Path to greendown_outputs containing the per-year transition
-            and CI-width GeoTIFFs.
+        data_dir: Path to Data/ containing reference GeoTIFFs for CRS lookup.
+        greendown_dir: Path to Greendown_Outputs/ containing per-year transition
+            and CI-width GeoTIFFs, and where output files are written.
     """
     import json
     import warnings
     from edit_data_table import _compute_global_avg_middle
     from fit_greendown_curves import _canonical_crs
 
-    lookup = _build_cross_year_transition_lookup(output_dir)
+    lookup = _build_cross_year_transition_lookup(greendown_dir)
     if not lookup:
         print('  No per-year transition tifs found; cannot export prediction avg assets.')
         return
@@ -378,22 +380,22 @@ def export_prediction_avg_assets(output_dir):
         warnings.simplefilter('ignore', category=RuntimeWarning)  # all-NaN slices
         avg = np.nanmean(np.stack(arrs), axis=0).astype(np.float32)
 
-    ref_path = os.path.join(output_dir, 'greendown_middle_avg.tif')
+    ref_path = os.path.join(greendown_dir, 'greendown_middle_avg.tif')
     with rasterio.open(ref_path) as src:
         profile = src.profile
     # Use the authoritative CRS from the reference raster (the avg tifs have
     # historically carried a mislabeled CRS).
-    ref_crs = _canonical_crs(output_dir)
+    ref_crs = _canonical_crs(data_dir)
     if ref_crs is not None:
         profile.update(crs=ref_crs)
     out = avg.copy()
     out[np.isnan(out)] = NODATA
-    tif_path = os.path.join(output_dir, 'greendown_middle_avg_filtered.tif')
+    tif_path = os.path.join(greendown_dir, 'greendown_middle_avg_filtered.tif')
     with rasterio.open(tif_path, 'w', **profile) as dst:
         dst.write(out, 1)
 
-    global_avg = _compute_global_avg_middle(output_dir)
-    meta_path = os.path.join(output_dir, 'greendown_avg_meta.json')
+    global_avg = _compute_global_avg_middle(greendown_dir)
+    meta_path = os.path.join(greendown_dir, 'greendown_avg_meta.json')
     with open(meta_path, 'w') as f:
         json.dump({'global_avg_middle': float(global_avg)}, f, indent=2)
 

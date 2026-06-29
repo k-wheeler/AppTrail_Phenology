@@ -33,7 +33,7 @@ jobs:
         run: pytest qc_tests.py -q
 
       - name: Generate web outputs
-        run: python generate_web_outputs.py --output-dir ./greendown_outputs --web-dir ./web_outputs
+        run: python generate_web_outputs.py --data-dir ./Data --greendown-dir ./Greendown_Outputs --model-dir ./Model_Outputs --web-dir ./web_outputs
         env:
           GEE_SERVICE_ACCOUNT_KEY: ${{ secrets.GEE_SERVICE_ACCOUNT_KEY }}
 
@@ -44,8 +44,8 @@ jobs:
           # Only hls_indices_ref_current.tif is committed; the per-year ref tif
           # (hls_indices_ref_2*.tif) is gitignored — prediction falls back to the
           # _current copy, so it never needs to be staged.
-          git add greendown_outputs/pixel_state_*.npz greendown_outputs/hls_indices_ref_current.tif
-          git add greendown_outputs/cdd_state_*.npz 2>/dev/null || true
+          git add Data/pixel_state_*.npz Data/hls_indices_ref_current.tif
+          git add Data/cdd_state_*.npz 2>/dev/null || true
           git diff --cached --quiet || git commit -m "chore: update pixel state $(date -u +%F)"
           git push
 
@@ -62,4 +62,4 @@ jobs:
           git push
 
       - name: Health check
-        run: python health_check.py --output-dir ./greendown_outputs --web-dir ./web_outputs
+        run: python health_check.py --data-dir ./Data --web-dir ./web_outputs

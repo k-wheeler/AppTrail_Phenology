@@ -11,7 +11,7 @@ from streamlit_folium import st_folium
 from PIL import Image
 
 from predict_for_date import predict_phenology
-from constants import OUTPUT_DIR, LABEL_COLORS, LABEL_ORDER
+from constants import DATA_DIR, GREENDOWN_DIR, MODEL_DIR, LABEL_COLORS, LABEL_ORDER
 from map_utils import _pred_grid_to_rgba, _get_wgs84_bounds
 
 
@@ -121,7 +121,8 @@ selected_date = st.date_input(
 if 'last_date' not in st.session_state or st.session_state.last_date != selected_date:
     with st.spinner('Running prediction...'):
         pred_grid, forest_mask, transform, crs = predict_phenology(
-            selected_date.isoformat(), OUTPUT_DIR
+            selected_date.isoformat(),
+            data_dir=DATA_DIR, greendown_dir=GREENDOWN_DIR, model_dir=MODEL_DIR
         )
     st.session_state.last_date   = selected_date
     st.session_state.pred_grid   = pred_grid

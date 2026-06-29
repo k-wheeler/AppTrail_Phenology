@@ -25,14 +25,14 @@ import numpy as np
 from predict_for_date import FEATURE_COLS
 
 
-def explain_prediction(feature_values, output_dir='./greendown_outputs', verbose=True):
+def explain_prediction(feature_values, model_dir='./Model_Outputs', verbose=True):
     """Return (and optionally print) the decision path for one sample.
 
     Args:
         feature_values: Dict mapping FEATURE_COLS names to raw values. Missing
             keys (or NaN) are treated as the training mean, matching the live
             prediction's NaN->0 normalized substitution.
-        output_dir: Directory containing decision_tree_model.joblib and
+        model_dir: Directory containing decision_tree_model.joblib and
             norm_stats.json.
         verbose: If True, print the path to stdout.
 
@@ -40,8 +40,8 @@ def explain_prediction(feature_values, output_dir='./greendown_outputs', verbose
         Dict with keys: 'prediction', 'steps' (list of per-node dicts), and
         'leaf' (leaf sample count and class distribution).
     """
-    mdl = joblib.load(os.path.join(output_dir, 'decision_tree_model.joblib'))
-    with open(os.path.join(output_dir, 'norm_stats.json')) as f:
+    mdl = joblib.load(os.path.join(model_dir, 'decision_tree_model.joblib'))
+    with open(os.path.join(model_dir, 'norm_stats.json')) as f:
         norm_stats = json.load(f)
 
     means = np.array([norm_stats[c]['mean'] for c in FEATURE_COLS])
@@ -123,7 +123,7 @@ def explain_prediction(feature_values, output_dir='./greendown_outputs', verbose
 def main():
     parser = argparse.ArgumentParser(
         description='Trace feature values through the decision tree.')
-    parser.add_argument('--output-dir', default='./greendown_outputs')
+    parser.add_argument('--model-dir', default='./Model_Outputs')
     parser.add_argument('--json', default=None,
                         help='JSON object of {feature: value}; overrides individual flags.')
     for col in FEATURE_COLS:
@@ -139,7 +139,7 @@ def main():
     if not feature_values:
         parser.error('Provide at least one feature value (e.g. --EVI 0.43) or --json.')
 
-    explain_prediction(feature_values, output_dir=args.output_dir)
+    explain_prediction(feature_values, model_dir=args.model_dir)
 
 
 if __name__ == '__main__':
