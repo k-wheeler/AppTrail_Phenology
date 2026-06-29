@@ -21,14 +21,7 @@ from constants import NODATA
 PRED_YEAR = datetime.date.today().year
 FEATURE_COLS = ['EVI', 'NDVI', 'evi_delta', 'evi_delta2',
                 'ndvi_delta', 'ndvi_delta2', 'day_length_hrs', 'doy_minus_avg_middle',
-                'mode_label_7day',
-                # CDD feature disabled. To re-enable, uncomment 'cdd_accumulated'
-                # here AND the matching X assignments in this file, the cdd lines
-                # in build_data_table.py, and the FEAT_LABELS entry in
-                # generate_web_outputs.py, then retrain. (tmean_recent is enabled.)
-                # 'cdd_accumulated',
-                'tmean_recent',
-                ]
+                'mode_label_7day', 'cdd_accumulated', 'tmean_recent']
 
 
 _LABEL_LIST   = ['before', 'early', 'late', 'after']
@@ -261,11 +254,11 @@ def predict_phenology(date_str, output_dir):
     X[:, 7] = doy_minus
     # No rolling label history in the full-stack path; nan_to_num fills to normalized mean
     X[:, 8] = np.nan
-    # T_mean from current-year state file; nan imputed to mean at normalize step
+    # CDD and T_mean from current-year state file; nan imputed to mean at normalize step
     cdd_state_path = os.path.join(output_dir, f'cdd_state_{PRED_YEAR}.npz')
-    # X[:, ?] = cdd_from_state(cdd_state_path, PRED_YEAR, target_doy,
-    #                          lat_array[r, c], lon_array[r, c])   # CDD disabled
-    X[:, 9]  = tmean_from_state(cdd_state_path, lat_array[r, c], lon_array[r, c])
+    X[:, 9]  = cdd_from_state(cdd_state_path, PRED_YEAR, target_doy,
+                              lat_array[r, c], lon_array[r, c])
+    X[:, 10] = tmean_from_state(cdd_state_path, lat_array[r, c], lon_array[r, c])
 
     # Z-score normalization using saved training statistics
     for j, col in enumerate(FEATURE_COLS):
@@ -408,8 +401,8 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
                                  anchor - global_avg_middle, doy_minus)
         Xk[:, 7]  = doy_minus
         Xk[:, 8]  = _forward_mode(labels_slot, DW, slot_valid, k, obs_doy_k)
-        # Xk[:, ?] = cdd_state_cum_at_doys(cdd_state, year, anchor, lat_pix, lon_pix)  # CDD disabled
-        Xk[:, 9]  = cdd_state_tmean_at_doys(cdd_state, anchor, lat_pix, lon_pix)
+        Xk[:, 9]  = cdd_state_cum_at_doys(cdd_state, year, anchor, lat_pix, lon_pix)
+        Xk[:, 10] = cdd_state_tmean_at_doys(cdd_state, anchor, lat_pix, lon_pix)
 
         if k == 0:
             raw_slot0 = Xk.copy()
