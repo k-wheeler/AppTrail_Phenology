@@ -18,6 +18,9 @@ greendown_outputs/greendown_*_ci_width_*.tif
 !greendown_outputs/greendown_avg_meta.json
 !greendown_outputs/norm_stats.json
 !greendown_outputs/decision_tree_model.joblib
+!greendown_outputs/rnn_model.pt
+!greendown_outputs/rnn_norm_stats.json
+!greendown_outputs/rnn_model_config.json
 !greendown_outputs/pixel_state_*.npz
 
 # Python

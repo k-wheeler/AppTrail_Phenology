@@ -12,3 +12,4 @@ pyproj
 affine
 tzdata
 pytest
+torch
