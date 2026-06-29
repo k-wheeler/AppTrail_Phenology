@@ -337,6 +337,18 @@ def _render_html(web_dir, meta, areas_rnn=None):
     hist_bars_dt  = _hist_bars(areas_dt)
     hist_bars_rnn = _hist_bars(areas_rnn) if has_rnn else ''
 
+    # Pre-compute RNN map JS (must use an f-string here so {center}/{bounds}/{date_str}
+    # expand correctly; single JS braces are written as {{ }} to survive f-string processing).
+    if has_rnn:
+        rnn_map_js = (
+            f'var mapRnn = L.map("map-rnn").setView({center}, 10);\n'
+            f'L.tileLayer("https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png",\n'
+            f'    {{attribution: "&copy; OpenStreetMap contributors &copy; CARTO"}}).addTo(mapRnn);\n'
+            f'L.imageOverlay("current_pred_rnn.png?v={date_str}", {bounds}, {{opacity: 1.0}}).addTo(mapRnn);'
+        )
+    else:
+        rnn_map_js = ''
+
     # Check which avg maps are available
     avg_tabs = ''
     for phase, title in [('start', 'Avg Start'), ('middle', 'Avg Middle'), ('end', 'Avg End')]:
@@ -569,7 +581,7 @@ L.imageOverlay('current_pred_dt.png?v={date_str}', {bounds}, {{opacity: 1.0}}).a
 
 // Neural Network prediction map
 var mapRnn = null;
-{'var mapRnn = L.map("map-rnn").setView(' + str(center) + ', 10);' + chr(10) + 'L.tileLayer("https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png", {{attribution: "&copy; OpenStreetMap contributors &copy; CARTO"}}).addTo(mapRnn);' + chr(10) + 'L.imageOverlay("current_pred_rnn.png?v={date_str}", {bounds}, {{opacity: 1.0}}).addTo(mapRnn);' if has_rnn else ''}
+{rnn_map_js}
 
 // Pixel-click popup: each pixel stores its WGS84 centre lat/lon so lookup
 // is a simple nearest-neighbour search — no coordinate transform needed.
