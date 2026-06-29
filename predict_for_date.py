@@ -43,8 +43,19 @@ def _predict_aligned(mdl, X):
     names = getattr(mdl, 'feature_names_in_', None)
     if names is None:
         return mdl.predict(X)
+    names = list(names)
+    if set(names) != set(FEATURE_COLS):
+        missing = sorted(set(names) - set(FEATURE_COLS))
+        extra   = sorted(set(FEATURE_COLS) - set(names))
+        raise ValueError(
+            'Model/feature mismatch: committed decision_tree_model.joblib was trained '
+            f'on {len(names)} features but FEATURE_COLS defines {len(FEATURE_COLS)}. '
+            f'Model needs but code omits: {missing or None}. '
+            f'Code provides but model lacks: {extra or None}. '
+            'Retrain via Main.ipynb and commit decision_tree_model.joblib + norm_stats.json.'
+        )
     X_df = pd.DataFrame(X, columns=FEATURE_COLS)
-    return mdl.predict(X_df[list(names)])
+    return mdl.predict(X_df[names])
 
 
 _LABEL_LIST   = ['before', 'early', 'late', 'after']
