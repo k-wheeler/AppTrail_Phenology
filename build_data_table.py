@@ -242,7 +242,7 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
         doys          = np.load(os.path.join(output_dir, f'hls_indices_doys_{year}.npy'))
         points        = _load_point_estimates(output_dir, year)
         lat_array, lon_array = _load_lat_lon_arrays(output_dir, year)
-        # cdd_hist      = load_cdd_historical(year, output_dir)   # temperature features disabled
+        cdd_hist      = load_cdd_historical(year, output_dir)
 
         pixel_rows, pixel_cols = np.where(mask)
         print(f'  {year}: {len(pixel_rows)} qualifying pixels')
@@ -290,19 +290,16 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
                 prev2_ndvi  = prev_ndvi
                 prev_ndvi   = float(ndvi)
                 date = (datetime.date(year, 1, 1) + datetime.timedelta(days=int(doy) - 1)).isoformat()
-                # --- Temperature features disabled. To re-enable, uncomment these
-                # lines, the two 'cdd_accumulated'/'tmean_recent' entries in the row
-                # dict and the DataFrame column list below, FEATURE_COLS in
-                # predict_for_date.py, and the FEAT_LABELS entries in
-                # generate_web_outputs.py, then retrain.
-                # Sample CDD and daily mean temperature for the PREVIOUS day
-                # (doy - 1) to match serving, where the most recent available
-                # gridMET reading lags the prediction date by ~1-2 days.
-                # prev_doy = int(doy) - 1
+                # Sample daily mean temperature for the PREVIOUS day (doy - 1) to
+                # match serving, where the most recent available gridMET reading
+                # lags the prediction date by ~1-2 days.
+                # (CDD feature disabled — uncomment the cdd lines + row/column
+                # entries below and in predict_for_date.py to re-enable, then retrain.)
+                prev_doy = int(doy) - 1
                 # cdd   = float(cdd_at_latlon(cdd_hist, prev_doy, year,
                 #                             np.array([lat]), np.array([lon]))[0])
-                # tmean = float(tmean_at_latlon(cdd_hist, prev_doy,
-                #                               np.array([lat]), np.array([lon]))[0])
+                tmean = float(tmean_at_latlon(cdd_hist, prev_doy,
+                                              np.array([lat]), np.array([lon]))[0])
                 rows.append({
                     'year':                      year,
                     'date':                      date,
@@ -318,8 +315,8 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
                     'doy_minus_avg_start':  int(doy) - avg_doys['start'],
                     'doy_minus_avg_middle': int(doy) - avg_doys['middle'],
                     'doy_minus_avg_end':    int(doy) - avg_doys['end'],
-                    # 'cdd_accumulated':           cdd,      # temperature features disabled
-                    # 'tmean_recent':              tmean,    # temperature features disabled
+                    # 'cdd_accumulated':           cdd,      # CDD feature disabled
+                    'tmean_recent':              tmean,
                     'label':                     _assign_label(doy, start, middle, end),
                 })
 
@@ -328,7 +325,8 @@ def build_feature_table(output_dir, years, max_width=MAX_CI_WIDTH):
         'evi_delta', 'evi_delta2', 'ndvi_delta', 'ndvi_delta2',
         'day_length_hrs',
         'doy_minus_avg_start', 'doy_minus_avg_middle', 'doy_minus_avg_end',
-        # 'cdd_accumulated', 'tmean_recent',   # temperature features disabled
+        # 'cdd_accumulated',   # CDD feature disabled
+        'tmean_recent',
         'label',
     ])
     print(f'\nTotal labeled phenology observations: {len(df)}')
