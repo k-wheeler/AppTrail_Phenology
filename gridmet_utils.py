@@ -329,15 +329,25 @@ def tmean_at_latlon(cdd_data, target_doy, lat_vals, lon_vals):
 # Public API — production (current year, GitHub-stored state)
 # ---------------------------------------------------------------------------
 
+# Number of most-recent days retained in the current-year cdd_state series.
+# Must comfortably exceed the 7-day mode window so any recent observation's
+# CDD/T_mean can be looked up by DOY.
+CDD_STATE_ROLLING_DAYS = 16
+
+
 def update_cdd_state(year, route_buffer, output_dir):
-    """Incrementally update the current-year accumulated CDD state file.
+    """Incrementally update the current-year CDD/T_mean state file.
 
-    Loads cdd_state_{year}.npz, downloads any new gridMET data not yet included
-    (DOY > last_doy), adds it to the accumulator, and saves back.  Running this
-    multiple times per day is safe — only new dates are fetched.
+    cdd_state_{year}.npz stores a rolling per-DOY series for the most recent
+    CDD_STATE_ROLLING_DAYS days, so the Action can look up accumulated CDD and
+    daily mean temperature for any recent observation date (not just the latest):
+        recent_doys (K,) int32, recent_cdd_cum (K, h, w) float32 (cumulative CDD
+        through each DOY), recent_tmean (K, h, w) float32, last_doy int32,
+        transform (6,), crs_wkt str.
 
-    CDD accumulation only starts August 1; before that, CDD stays 0 but tmean_last
-    is still updated daily so recent temperature is always available for predictions.
+    Downloads only gridMET days not yet included (DOY > last_doy); re-running
+    multiple times per day is safe. CDD accumulation starts Aug 1 (earlier days
+    contribute 0) but T_mean is recorded year-round.
 
     Args:
         year: Integer year.
@@ -354,29 +364,41 @@ def update_cdd_state(year, route_buffer, output_dir):
     yesterday  = today - datetime.timedelta(days=1)
     yesterday_doy = yesterday.timetuple().tm_yday
 
-    cdd_acc   = None
-    tmean_last = None
+    recent_doys = []   # ascending list of int DOYs
+    recent_cum  = []   # list of (h, w) cumulative-CDD grids
+    recent_tm   = []   # list of (h, w) T_mean grids
+    cdd_acc       = None
     transform_arr = crs_wkt = None
+    last_doy      = None
 
     if os.path.exists(state_path):
-        state = np.load(state_path, allow_pickle=True)
+        state         = np.load(state_path, allow_pickle=True)
         last_doy      = int(state['last_doy'])
-        cdd_acc       = state['cdd_acc'].copy().astype(float)
-        tmean_last    = (state['tmean_last'].copy().astype(float)
-                         if 'tmean_last' in state.files else None)
         transform_arr = state['transform'].copy()
         crs_wkt       = str(state['crs_wkt'])
-        print(f'  CDD state loaded: last_doy={last_doy}')
+        if 'recent_doys' in state.files:
+            recent_doys = [int(d) for d in state['recent_doys']]
+            recent_cum  = [g.astype(float) for g in state['recent_cdd_cum']]
+            recent_tm   = [g.astype(float) for g in state['recent_tmean']]
+            cdd_acc     = recent_cum[-1].copy() if recent_cum else None
+        else:
+            # Migrate legacy single-day schema (cdd_acc / tmean_last) by seeding
+            # the series with that one latest day.
+            cdd_acc    = state['cdd_acc'].astype(float)
+            tmean_last = (state['tmean_last'].astype(float)
+                          if 'tmean_last' in state.files
+                          else np.full(cdd_acc.shape, np.nan))
+            recent_doys = [last_doy]
+            recent_cum  = [cdd_acc.copy()]
+            recent_tm   = [tmean_last]
+        print(f'  CDD state loaded: last_doy={last_doy}, series len={len(recent_doys)}')
     else:
-        # First run: no state file yet. If we are already past Aug 1, start at
-        # Aug 1 so CDD accumulates the full season. Otherwise (CDD is 0) fetch a
-        # short recent window so the most recent T_mean is captured despite
-        # gridMET's 1–2 day publishing latency.
-        FIRST_RUN_LOOKBACK_DAYS = 5
+        # First run: fetch enough recent days to seed the rolling series. If past
+        # Aug 1, start at Aug 1 so cumulative CDD is correct for the season.
         if today_doy >= aug1_doy:
             last_doy = aug1_doy - 1
         else:
-            last_doy = yesterday_doy - FIRST_RUN_LOOKBACK_DAYS
+            last_doy = yesterday_doy - CDD_STATE_ROLLING_DAYS
 
     if last_doy >= yesterday_doy:
         print(f'  CDD state is current through DOY {last_doy}.')
@@ -393,93 +415,141 @@ def update_cdd_state(year, route_buffer, output_dir):
         return state_path
 
     if cdd_acc is None:
-        h, w = result['tmmn_stack'].shape[1], result['tmmn_stack'].shape[2]
-        cdd_acc       = np.zeros((h, w), dtype=float)
+        h, w    = result['tmmn_stack'].shape[1], result['tmmn_stack'].shape[2]
+        cdd_acc = np.zeros((h, w), dtype=float)
+    if transform_arr is None:
         transform_arr = result['transform']
         crs_wkt       = result['crs_wkt']
 
-    cdd_increments  = _compute_cdd_increments(result['tmmn_stack'], result['tmmx_stack'])
-    tmean_stack     = _compute_tmean_c(result['tmmn_stack'], result['tmmx_stack'])
+    cdd_increments = _compute_cdd_increments(result['tmmn_stack'], result['tmmx_stack'])
+    tmean_stack    = _compute_tmean_c(result['tmmn_stack'], result['tmmx_stack'])
     for i, doy in enumerate(result['doys']):
+        doy = int(doy)
         if doy >= aug1_doy:
             cdd_acc += cdd_increments[i]
-            print(f'    Accumulated CDD for DOY {doy}')
-        else:
-            print(f'    Stored T_mean for DOY {doy} (before Aug 1; CDD not accumulated)')
-        tmean_last = tmean_stack[i]   # always keep the most recent day's T_mean
-        last_doy   = max(last_doy, int(doy))
+        recent_doys.append(doy)
+        recent_cum.append(cdd_acc.copy())
+        recent_tm.append(tmean_stack[i].astype(float))
+        last_doy = max(last_doy, doy)
+
+    # Keep only the most recent CDD_STATE_ROLLING_DAYS days.
+    if len(recent_doys) > CDD_STATE_ROLLING_DAYS:
+        recent_doys = recent_doys[-CDD_STATE_ROLLING_DAYS:]
+        recent_cum  = recent_cum[-CDD_STATE_ROLLING_DAYS:]
+        recent_tm   = recent_tm[-CDD_STATE_ROLLING_DAYS:]
 
     np.savez_compressed(
         state_path,
-        cdd_acc=cdd_acc.astype(np.float32),
-        tmean_last=(tmean_last.astype(np.float32)
-                    if tmean_last is not None
-                    else np.full(cdd_acc.shape, np.nan, dtype=np.float32)),
+        recent_doys=np.array(recent_doys, dtype=np.int32),
+        recent_cdd_cum=np.stack(recent_cum).astype(np.float32),
+        recent_tmean=np.stack(recent_tm).astype(np.float32),
         last_doy=np.int32(last_doy),
         transform=transform_arr,
         crs_wkt=np.array(str(crs_wkt)),
     )
-    print(f'  Saved CDD state → {state_path} (last_doy={last_doy})')
+    print(f'  Saved CDD state → {state_path} (last_doy={last_doy}, series={len(recent_doys)})')
     return state_path
 
 
-def tmean_from_state(state_path, lat_vals, lon_vals):
-    """Look up the most recent daily mean temperature (°C) from the current-year state file.
+def load_cdd_state(state_path):
+    """Load cdd_state_{year}.npz into a dict, normalizing legacy schemas.
 
-    Returns the T_mean grid for the last day that was processed (last_doy).
+    Returns None if the file does not exist. Otherwise a dict with keys:
+        doys (K,) int, cdd_cum (K, h, w), tmean (K, h, w), last_doy int,
+        transform (6,).  DOYs are ascending.
+    """
+    if not os.path.exists(state_path):
+        return None
+    s = np.load(state_path, allow_pickle=True)
+    if 'recent_doys' in s.files:
+        return {
+            'doys':      np.asarray(s['recent_doys']).astype(int),
+            'cdd_cum':   s['recent_cdd_cum'].astype(float),
+            'tmean':     s['recent_tmean'].astype(float),
+            'last_doy':  int(s['last_doy']),
+            'transform': s['transform'],
+        }
+    # Legacy single-day schema.
+    cdd_acc    = s['cdd_acc'].astype(float)
+    tmean_last = (s['tmean_last'].astype(float)
+                  if 'tmean_last' in s.files
+                  else np.full(cdd_acc.shape, np.nan))
+    last_doy = int(s['last_doy'])
+    return {
+        'doys':      np.array([last_doy]),
+        'cdd_cum':   cdd_acc[None, ...],
+        'tmean':     tmean_last[None, ...],
+        'last_doy':  last_doy,
+        'transform': s['transform'],
+    }
+
+
+def _gmet_rowcol(transform, lat_vals, lon_vals, h_gmet, w_gmet):
+    t = transform
+    cols = np.clip(((lon_vals - t[2]) / t[0]).astype(int), 0, w_gmet - 1)
+    rows = np.clip(((lat_vals - t[5]) / t[4]).astype(int), 0, h_gmet - 1)
+    return rows, cols
+
+
+def cdd_state_cum_at_doys(state, year, doy_vals, lat_vals, lon_vals):
+    """Accumulated CDD at each pixel's own target DOY from a loaded cdd_state.
 
     Args:
-        state_path: Path to cdd_state_{year}.npz.
-        lat_vals: 1D float array of WGS84 latitudes.
-        lon_vals: 1D float array of WGS84 longitudes.
+        state: Dict from load_cdd_state, or None.
+        year: Calendar year (for the Aug 1 threshold).
+        doy_vals: 1D array of per-pixel target DOYs.
+        lat_vals, lon_vals: 1D WGS84 coordinate arrays (same length).
 
     Returns:
-        1D float array of T_mean values in °C.  NaN if state file or field absent.
+        1D float array of accumulated CDD. 0 before Aug 1, or where the DOY is
+        earlier than every day in the series.
     """
     n = len(lat_vals)
-    if not os.path.exists(state_path):
+    out = np.zeros(n)
+    if state is None:
+        return out
+    doys = state['doys']
+    h, w = state['cdd_cum'].shape[1:]
+    rows, cols = _gmet_rowcol(state['transform'], lat_vals, lon_vals, h, w)
+    idxs  = np.searchsorted(doys, doy_vals, side='right') - 1
+    valid = (np.asarray(doy_vals) >= _aug1_doy(year)) & (idxs >= 0)
+    vals  = state['cdd_cum'][np.where(valid, idxs, 0), rows, cols]
+    return np.where(valid, vals, 0.0)
+
+
+def cdd_state_tmean_at_doys(state, doy_vals, lat_vals, lon_vals):
+    """Daily mean temperature (°C) at each pixel's own target DOY from cdd_state.
+
+    Returns NaN where the DOY precedes every day in the stored series.
+    """
+    n = len(lat_vals)
+    if state is None:
         return np.full(n, np.nan)
-
-    state = np.load(state_path, allow_pickle=True)
-    if 'tmean_last' not in state.files:
-        return np.full(n, np.nan)
-
-    tmean_last = state['tmean_last'].astype(float)
-    t = state['transform']
-
-    h_gmet, w_gmet = tmean_last.shape
-    gmet_cols = np.clip(((lon_vals - t[2]) / t[0]).astype(int), 0, w_gmet - 1)
-    gmet_rows = np.clip(((lat_vals - t[5]) / t[4]).astype(int), 0, h_gmet - 1)
-
-    return tmean_last[gmet_rows, gmet_cols]
+    doys = state['doys']
+    h, w = state['tmean'].shape[1:]
+    rows, cols = _gmet_rowcol(state['transform'], lat_vals, lon_vals, h, w)
+    idxs  = np.searchsorted(doys, doy_vals, side='right') - 1
+    valid = idxs >= 0
+    vals  = state['tmean'][np.where(valid, idxs, 0), rows, cols]
+    return np.where(valid, vals, np.nan)
 
 
 def cdd_from_state(state_path, year, target_doy, lat_vals, lon_vals):
-    """Look up accumulated CDD from the current-year state file.
+    """Latest accumulated CDD (current-prediction convenience wrapper).
 
-    Args:
-        state_path: Path to cdd_state_{year}.npz.
-        year: Calendar year.
-        target_doy: Target day-of-year.
-        lat_vals: 1D float array of WGS84 latitudes.
-        lon_vals: 1D float array of WGS84 longitudes.
-
-    Returns:
-        1D float array of accumulated CDD values.
-        Returns 0 for dates before August 1 or if no state file exists yet.
+    Returns 0 before Aug 1 or if no state file exists yet.
     """
-    n = len(lat_vals)
-    if target_doy < _aug1_doy(year):
-        return np.zeros(n)
-    if not os.path.exists(state_path):
-        return np.zeros(n)
+    state = load_cdd_state(state_path)
+    if state is None:
+        return np.zeros(len(lat_vals))
+    doy_vals = np.full(len(lat_vals), target_doy)
+    return cdd_state_cum_at_doys(state, year, doy_vals, lat_vals, lon_vals)
 
-    state = np.load(state_path, allow_pickle=True)
-    cdd_acc = state['cdd_acc'].astype(float)
-    t = state['transform']
 
-    h_gmet, w_gmet = cdd_acc.shape
-    gmet_cols = np.clip(((lon_vals - t[2]) / t[0]).astype(int), 0, w_gmet - 1)
-    gmet_rows = np.clip(((lat_vals - t[5]) / t[4]).astype(int), 0, h_gmet - 1)
-
-    return cdd_acc[gmet_rows, gmet_cols]
+def tmean_from_state(state_path, lat_vals, lon_vals):
+    """Most recent daily mean temperature (current-prediction convenience wrapper)."""
+    state = load_cdd_state(state_path)
+    if state is None:
+        return np.full(len(lat_vals), np.nan)
+    doy_vals = np.full(len(lat_vals), state['last_doy'])
+    return cdd_state_tmean_at_doys(state, doy_vals, lat_vals, lon_vals)

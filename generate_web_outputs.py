@@ -432,13 +432,13 @@ window['map{phase}'].on('click', function(e) {{
       <li><strong>Machine learning</strong> &mdash; A decision tree classifier trained on 10 years
       of labeled pixel-observations uses 11 features (EVI, NDVI, their recent changes, day length,
       days relative to that pixel&rsquo;s historical average mid-transition date, the most
-      common predicted label over the past 7 days, accumulated cold degree-days since August 1,
+      common predicted state over the past 7 days, accumulated cold degree-days since August 1,
       and the most recent daily mean temperature) to assign one of four states:
       Before, Early, Late, or After.</li>
       <li><strong>Daily update</strong> &mdash; Each morning, new imagery and temperature data
       are fetched, rolling observation windows are updated, and predictions are recomputed
-      for all ~15,000 forest pixels. Today&rsquo;s predictions are stored and used as part of
-      tomorrow&rsquo;s feature set.</li>
+      for all ~15,000 forest pixels. The 7-day mode feature is recomputed each run by
+      re-predicting every observation from the past week, so no predictions are stored.</li>
     </ol>
 
     <h3>Interacting with the map</h3>
@@ -687,51 +687,16 @@ def main():
 
     # Run prediction (request raw feature grids for pixel-click popups)
     print(f'\nRunning prediction for {today_str}...')
-    pred_grid, forest_mask, transform, crs, feature_grids = predict_from_pixel_state(
+    (pred_grid, forest_mask, transform, crs,
+     feature_grids, recent_info) = predict_from_pixel_state(
         state_path, today_str, args.output_dir, return_features=True
     )
 
-    # Record today's prediction into the per-observation rolling label history,
-    # keyed by observation DOY so mode_label_7day mirrors training: a label is
-    # stored for a pixel only when a new satellite observation has arrived (doy_0
-    # advanced), and the feature takes the mode over the [doy-7, doy-1] observation
-    # window. Re-running on a day with no new imagery refreshes the current
-    # observation's label rather than appending a duplicate entry.
-    _label_enc = {'before': 0, 'early': 1, 'late': 2, 'after': 3}
+    # Predicted labels are no longer persisted: mode_label_7day is recomputed each
+    # run by re-predicting the recent observations (see predict_from_pixel_state).
+    # recent_info carries those re-predicted labels for the pixel-click popup.
     _label_dec = {-1: None, 0: 'before', 1: 'early', 2: 'late', 3: 'after'}
-    _label_int = np.full(pred_grid.shape, -1, dtype=np.int8)
-    for _lbl, _val in _label_enc.items():
-        _label_int[pred_grid == _lbl] = _val
-    with np.load(state_path) as _sd:
-        _state_dict = {k: _sd[k].copy() for k in _sd.files}
-    _h, _w = _state_dict['evi_0'].shape
-
-    _rl  = _state_dict.get('recent_labels')
-    _rld = _state_dict.get('recent_label_doys')
-    if _rl is None or _rld is None:        # legacy/first run: start history fresh
-        _rl  = np.full((_h, _w, 7), -1, dtype=np.int8)
-        _rld = np.full((_h, _w, 7), -1, dtype=np.int16)
-
-    _d0 = _state_dict.get('doy_0', np.full((_h, _w), np.nan)).astype(float)
-    _has_obs   = np.isfinite(_d0)
-    _d0_int    = np.where(_has_obs, _d0, -1).astype(np.int16)
-    _slot0_doy = _rld[:, :, 0]
-    _is_new  = _has_obs & (_d0_int != _slot0_doy)   # a new observation arrived
-    _is_same = _has_obs & (_d0_int == _slot0_doy)   # same observation as last record
-
-    # Shift older entries back one slot, but only where a new observation arrived.
-    for _s in range(6, 0, -1):
-        _rl[:, :, _s]  = np.where(_is_new, _rl[:, :, _s - 1],  _rl[:, :, _s])
-        _rld[:, :, _s] = np.where(_is_new, _rld[:, :, _s - 1], _rld[:, :, _s])
-    _rl[:, :, 0]  = np.where(_is_new, _label_int, _rl[:, :, 0])
-    _rld[:, :, 0] = np.where(_is_new, _d0_int,    _rld[:, :, 0])
-    # Where no new observation arrived, refresh the current observation's label.
-    _rl[:, :, 0]  = np.where(_is_same, _label_int, _rl[:, :, 0])
-
-    _state_dict['recent_labels']     = _rl
-    _state_dict['recent_label_doys'] = _rld
-    np.savez_compressed(state_path, **_state_dict)
-    print('  Updated observation-keyed recent_labels in pixel state.')
+    _recent_labels = recent_info['labels']   # (h, w, N) int8, slot 0 newest
 
     # Save prediction PNG, warped to Web Mercator so it aligns with the basemap.
     # bounds comes from the warped raster and is reused for all overlays.
@@ -798,7 +763,10 @@ def main():
                 entry[f'avg_{_phase}_doy'] = None if np.isnan(v) else round(v, 1)
             else:
                 entry[f'avg_{_phase}_doy'] = None
-        entry['recent_labels'] = [_label_dec[int(_rl[ri, ci, j])] for j in range(7)]
+        entry['recent_labels'] = [
+            _label_dec.get(int(_recent_labels[ri, ci, j]), None)
+            for j in range(min(7, _recent_labels.shape[2]))
+        ]
         pixels.append(entry)
     pixel_json = {
         'pixels': pixels,

@@ -12,7 +12,10 @@ from build_data_table import (
     _build_cross_year_transition_lookup,
 )
 from edit_data_table import _compute_global_avg_middle
-from gridmet_utils import cdd_from_state, tmean_from_state
+from gridmet_utils import (
+    cdd_from_state, tmean_from_state,
+    load_cdd_state, cdd_state_cum_at_doys, cdd_state_tmean_at_doys,
+)
 from constants import NODATA
 
 PRED_YEAR = datetime.date.today().year
@@ -21,44 +24,45 @@ FEATURE_COLS = ['EVI', 'NDVI', 'evi_delta', 'evi_delta2',
                 'mode_label_7day', 'cdd_accumulated', 'tmean_recent']
 
 
-def _compute_mode_7day(recent_labels, recent_label_doys, doy0, r, c):
-    """Compute the ordinal mode of recent labels in the [doy0-7, doy0-1] window.
+_LABEL_LIST   = ['before', 'early', 'late', 'after']
+_LABEL_TO_INT = {lbl: i for i, lbl in enumerate(_LABEL_LIST)}
 
-    Mirrors the training-time feature (build_data_table._add_mode_label_7day):
-    for the pixel's most recent observation at DOY doy0, take the ordinal mode of
-    the labels of that pixel's prior observations whose DOY falls within the 7-day
-    window strictly before doy0. The label history is keyed by observation DOY
-    (not by Action run), so only days with a real satellite observation count and
-    days without new imagery are not double-counted.
+
+def _day_length_vec(doy, lat_deg):
+    """Vectorized day length in hours (numpy form of build_data_table._day_length)."""
+    lat  = np.radians(lat_deg)
+    decl = np.radians(-23.45 * np.cos(np.radians(360.0 / 365.0 * (doy + 10))))
+    arg  = np.clip(-np.tan(lat) * np.tan(decl), -1.0, 1.0)
+    return 2.0 * np.degrees(np.arccos(arg)) / 15.0
+
+
+def _forward_mode(labels_slot, doy_w, slot_valid, k, obs_doy_k):
+    """Ordinal mode of already-predicted older observations in [obs_doy_k-7, -1].
+
+    Mirrors the training feature (build_data_table._add_mode_label_7day) but the
+    window labels are the labels re-predicted for older observation slots (j > k)
+    during this same forward pass, rather than stored predictions.
 
     Args:
-        recent_labels: (h, w, 7) int8 array; -1 = empty slot,
-            0=before, 1=early, 2=late, 3=after. Slot 0 = most recent observation.
-        recent_label_doys: (h, w, 7) int16 array of the observation DOY for each
-            label slot; -1 = empty.
-        doy0: (h, w) float array of each pixel's most recent observation DOY.
-        r, c: Row and column index arrays for forest pixels (length n_px).
+        labels_slot: (n_px, N) int8 predicted labels per slot (-1 = none yet).
+        doy_w: (n_px, N) observation DOYs (slot 0 newest).
+        slot_valid: (n_px, N) bool, True where the slot holds a real observation.
+        k: Current slot index.
+        obs_doy_k: (n_px,) observation DOY of slot k (the window anchor).
 
     Returns:
-        1D float array of length n_px with mode values (0.0–3.0), or 0.0
-        (before) where no prior observation exists in the window.
+        (n_px,) float mode values (0.0–3.0); 0.0 where the window is empty.
     """
-    rl  = recent_labels[r, c, :]        # (n_px, 7)
-    rld = recent_label_doys[r, c, :]    # (n_px, 7)
-    d0  = doy0[r, c]                     # (n_px,)
-    mode_vals = np.zeros(len(r))
-    for i in range(len(r)):
-        di = d0[i]
-        if not np.isfinite(di):
-            continue
-        labels = rl[i]
-        doys   = rld[i]
-        window = (labels >= 0) & (doys >= di - 7) & (doys <= di - 1)
-        v = labels[window]
-        if len(v) > 0:
-            counts = np.bincount(v.astype(np.intp), minlength=4)
-            mode_vals[i] = float(np.argmax(counts))
-    return mode_vals
+    n_px, N = labels_slot.shape
+    counts = np.zeros((n_px, 4))
+    for j in range(k + 1, N):                       # older observations only
+        in_win = (slot_valid[:, j] & (labels_slot[:, j] >= 0)
+                  & (doy_w[:, j] >= obs_doy_k - 7) & (doy_w[:, j] <= obs_doy_k - 1))
+        lbl_j = labels_slot[:, j]
+        for ci in range(4):
+            counts[:, ci] += in_win & (lbl_j == ci)
+    has = counts.sum(axis=1) > 0
+    return np.where(has, np.argmax(counts, axis=1), 0).astype(float)
 
 
 def _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w, exclude_year=None):
@@ -289,49 +293,55 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
     year stack. Produces identical predictions to predict_phenology() for the
     same date, as long as the pixel state is current.
 
+    The mode_label_7day feature is computed by re-predicting the phenological
+    state of every stored observation in the past-7-day window (oldest first, so
+    each re-prediction can use the labels already assigned to older observations),
+    then taking the ordinal mode — no predicted labels are persisted.
+
     Args:
         state_path: Path to pixel_state_{year}.npz containing per-pixel arrays
-            evi_0/1/2, ndvi_0/1/2, doy_0/1/2 (index 0 = most recent valid obs).
+            evi_w/ndvi_w/doy_w (h, w, OBS_WINDOW; slot 0 = most recent valid obs).
         date_str: ISO-format date string, e.g. '2026-09-15'.
         output_dir: Path to greendown_outputs directory containing
             norm_stats.json, decision_tree_model.joblib, and transition GeoTIFFs.
         return_features: If True, return raw (pre-normalization) feature grids
-            as an additional dict.
+            and the re-predicted recent-observation history as extra values.
 
     Returns:
         Tuple of (pred_grid, forest_mask, transform, crs). When return_features
-        is True, a fifth element is included: a dict mapping each FEATURE_COLS
-        name to a 2D float array of shape (h, w) with raw feature values (NaN
-        for non-forest pixels).
+        is True, two more elements follow: a dict mapping each FEATURE_COLS name
+        to a 2D float (h, w) grid of raw slot-0 feature values, and a dict
+        {'labels': (h, w, N) int8, 'doys': (h, w, N) float} of the re-predicted
+        recent-observation labels (slot 0 newest) for the popup history.
     """
     date = datetime.date.fromisoformat(date_str)
     target_doy = date.timetuple().tm_yday
     year = date.year
 
-    state = np.load(state_path)
-    evi_0  = state['evi_0'].astype(float)
-    evi_1  = state['evi_1'].astype(float)
-    evi_2  = state['evi_2'].astype(float)
-    ndvi_0 = state['ndvi_0'].astype(float)
-    ndvi_1 = state['ndvi_1'].astype(float)
-    ndvi_2 = state['ndvi_2'].astype(float)
-    h, w = evi_0.shape
-    doy_0 = (state['doy_0'].astype(float)
-             if 'doy_0' in state.files
-             else np.full((h, w), np.nan))
-    recent_labels = (state['recent_labels']
-                     if 'recent_labels' in state.files
-                     else np.full((h, w, 7), -1, dtype=np.int8))
-    # Observation DOY for each label slot; absent on legacy (run-indexed) states,
-    # in which case the empty (-1) DOYs make the window exclude all old labels and
-    # the history rebuilds, observation by observation, with the new semantics.
-    recent_label_doys = (state['recent_label_doys']
-                         if 'recent_label_doys' in state.files
-                         else np.full((h, w, 7), -1, dtype=np.int16))
+    state = dict(np.load(state_path))
+    h, w = state['evi_0'].shape
+
+    # Observation window (h, w, N). Migrate a legacy 3-slot state if needed.
+    if 'evi_w' in state:
+        evi_w  = state['evi_w'].astype(float)
+        ndvi_w = state['ndvi_w'].astype(float)
+        doy_w  = state['doy_w'].astype(float)
+    else:
+        N0 = 3
+        evi_w  = np.full((h, w, N0), np.nan)
+        ndvi_w = np.full((h, w, N0), np.nan)
+        doy_w  = np.full((h, w, N0), np.nan)
+        for k in range(N0):
+            evi_w[:, :, k]  = state[f'evi_{k}'].astype(float)
+            ndvi_w[:, :, k] = state[f'ndvi_{k}'].astype(float)
+            doy_w[:, :, k]  = state[f'doy_{k}'].astype(float)
+    N = evi_w.shape[2]
 
     mdl = joblib.load(os.path.join(output_dir, 'decision_tree_model.joblib'))
     with open(os.path.join(output_dir, 'norm_stats.json')) as f:
         norm_stats = json.load(f)
+    norm_mean = np.array([norm_stats[col]['mean'] for col in FEATURE_COLS])
+    norm_std  = np.array([norm_stats[col]['std']  for col in FEATURE_COLS])
 
     # Use current-year ref raster if available; fall back to stable copy
     ref_path = os.path.join(output_dir, f'hls_indices_ref_{year}.tif')
@@ -344,9 +354,12 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
     lat_array, lon_array = _load_lat_lon_arrays(output_dir, year)
     cross_year_lookup = _build_cross_year_transition_lookup(output_dir)
     global_avg_middle = _load_global_avg_middle(output_dir)
+    avg_middle = _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w,
+                                       exclude_year=year)
+    cdd_state = load_cdd_state(os.path.join(output_dir, f'cdd_state_{year}.npz'))
 
-    # Forest mask: pixels with at least one valid observation in the state
-    forest_mask = np.isfinite(evi_0) & (evi_0 > 0)
+    # Forest mask: pixels with a valid most-recent observation (slot 0)
+    forest_mask = np.isfinite(evi_w[:, :, 0]) & (evi_w[:, :, 0] > 0)
     rows_idx, cols_idx = np.where(forest_mask)
     n_px = len(rows_idx)
 
@@ -354,46 +367,55 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
         return np.full((h, w), 'unknown', dtype=object), forest_mask, transform, crs
 
     r, c = rows_idx, cols_idx
-    X = np.zeros((n_px, len(FEATURE_COLS)))
-    X[:, 0] = evi_0[r, c]
-    X[:, 1] = ndvi_0[r, c]
-    X[:, 2] = evi_0[r, c] - evi_1[r, c]
-    X[:, 3] = evi_0[r, c] - evi_2[r, c]
-    X[:, 4] = ndvi_0[r, c] - ndvi_1[r, c]
-    X[:, 5] = ndvi_0[r, c] - ndvi_2[r, c]
-    X[:, 6] = np.array([_day_length(target_doy, float(lat_array[ri, ci]))
-                        for ri, ci in zip(r, c)])
+    EW = evi_w[r, c, :]                 # (n_px, N)
+    NW = ndvi_w[r, c, :]
+    DW = doy_w[r, c, :]
+    lat_pix = lat_array[r, c]
+    lon_pix = lon_array[r, c]
+    avg_mid_pix = avg_middle[r, c]
+    slot_valid = np.isfinite(EW) & (EW > 0) & np.isfinite(NW)   # (n_px, N)
 
-    # doy_minus_avg_middle: per-pixel average of the middle-transition DOY
-    # across historical years, gap-filled with the global average.
-    avg_middle = _per_pixel_avg_middle(cross_year_lookup, output_dir, h, w,
-                                       exclude_year=year)
-    doy_minus = np.where(np.isfinite(avg_middle[r, c]),
-                         target_doy - avg_middle[r, c], np.nan)
-    if not np.isnan(global_avg_middle):
-        doy_minus = np.where(np.isnan(doy_minus),
-                             target_doy - global_avg_middle, doy_minus)
-    X[:, 7] = doy_minus
-    X[:, 8] = _compute_mode_7day(recent_labels, recent_label_doys, doy_0, r, c)
+    labels_slot = np.full((n_px, N), -1, dtype=np.int8)
+    raw_slot0   = None
 
-    # cdd_accumulated and tmean_recent: look up from current-year state file
-    cdd_state_path = os.path.join(output_dir, f'cdd_state_{year}.npz')
-    X[:, 9]  = cdd_from_state(cdd_state_path, year, target_doy,
-                               lat_array[r, c], lon_array[r, c])
-    X[:, 10] = tmean_from_state(cdd_state_path, lat_array[r, c], lon_array[r, c])
+    # Forward pass: oldest observation slot first so each re-prediction's
+    # mode_label_7day can use the labels already assigned to older observations.
+    for k in range(N - 1, -1, -1):
+        # Anchor for time/temperature features: today for the current slot
+        # (do-not-anchor), the observation's own DOY for past slots.
+        anchor = np.full(n_px, float(target_doy)) if k == 0 else DW[:, k]
+        obs_doy_k = DW[:, k]                       # mode window anchor (observation)
 
-    # Capture raw (pre-normalization) feature values for the popup JSON
-    X_raw = X.copy()
+        Xk = np.zeros((n_px, len(FEATURE_COLS)))
+        Xk[:, 0] = EW[:, k]
+        Xk[:, 1] = NW[:, k]
+        Xk[:, 2] = EW[:, k] - (EW[:, k + 1] if k + 1 < N else np.nan)
+        Xk[:, 3] = EW[:, k] - (EW[:, k + 2] if k + 2 < N else np.nan)
+        Xk[:, 4] = NW[:, k] - (NW[:, k + 1] if k + 1 < N else np.nan)
+        Xk[:, 5] = NW[:, k] - (NW[:, k + 2] if k + 2 < N else np.nan)
+        Xk[:, 6] = _day_length_vec(anchor, lat_pix)
 
-    for j, col in enumerate(FEATURE_COLS):
-        mean = norm_stats[col]['mean']
-        std  = norm_stats[col]['std']
-        X[:, j] = (X[:, j] - mean) / std
-    X = np.where(np.isnan(X), 0.0, X)
+        doy_minus = np.where(np.isfinite(avg_mid_pix), anchor - avg_mid_pix, np.nan)
+        if not np.isnan(global_avg_middle):
+            doy_minus = np.where(np.isnan(doy_minus),
+                                 anchor - global_avg_middle, doy_minus)
+        Xk[:, 7]  = doy_minus
+        Xk[:, 8]  = _forward_mode(labels_slot, DW, slot_valid, k, obs_doy_k)
+        Xk[:, 9]  = cdd_state_cum_at_doys(cdd_state, year, anchor, lat_pix, lon_pix)
+        Xk[:, 10] = cdd_state_tmean_at_doys(cdd_state, anchor, lat_pix, lon_pix)
 
-    preds = mdl.predict(X)
+        if k == 0:
+            raw_slot0 = Xk.copy()
+
+        Xn = (Xk - norm_mean) / norm_std
+        Xn = np.where(np.isnan(Xn), 0.0, Xn)
+        preds_k = mdl.predict(Xn)
+        enc = np.array([_LABEL_TO_INT.get(p, -1) for p in preds_k], dtype=np.int8)
+        labels_slot[:, k] = np.where(slot_valid[:, k], enc, -1)
+
     pred_grid = np.full((h, w), 'unknown', dtype=object)
-    pred_grid[r, c] = preds
+    pred_grid[r, c] = [_LABEL_LIST[v] if v >= 0 else 'unknown'
+                       for v in labels_slot[:, 0]]
 
     if not return_features:
         return pred_grid, forest_mask, transform, crs
@@ -401,7 +423,13 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
     feature_grids = {}
     for j, col in enumerate(FEATURE_COLS):
         grid = np.full((h, w), np.nan)
-        grid[r, c] = X_raw[:, j]
+        grid[r, c] = raw_slot0[:, j]
         feature_grids[col] = grid
 
-    return pred_grid, forest_mask, transform, crs, feature_grids
+    recent_labels_grid = np.full((h, w, N), -1, dtype=np.int8)
+    recent_labels_grid[r, c, :] = labels_slot
+    recent_doys_grid = np.full((h, w, N), np.nan)
+    recent_doys_grid[r, c, :] = DW
+    recent_info = {'labels': recent_labels_grid, 'doys': recent_doys_grid}
+
+    return pred_grid, forest_mask, transform, crs, feature_grids, recent_info

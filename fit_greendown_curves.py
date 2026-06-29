@@ -11,6 +11,12 @@ from constants import NODATA
 
 N_CI_SAMPLES = 200  # Monte Carlo samples for confidence intervals
 
+# Number of most-recent valid observations retained per pixel. The prediction
+# only needs 3 for the spectral deltas, but the mode_label_7day feature re-predicts
+# every observation in the 7-day window, which (plus the two predecessors each
+# needs for its own deltas) can reach back several observations.
+OBS_WINDOW = 8
+
 
 # ----------------------------
 # Logistic model
@@ -373,6 +379,20 @@ def compute_transition_dates(hls_indices_collection, route_buffer, ma_forest, ye
 # Multi-year average
 # ----------------------------
 
+def _seed_window(state, prefix, h, w):
+    """Build an (h, w, OBS_WINDOW) observation window for a variable.
+
+    Seeds the first three slots from a legacy 3-slot pixel state
+    ({prefix}_0/1/2) when present; remaining slots are NaN.
+    """
+    win = np.full((h, w, OBS_WINDOW), np.nan, dtype=np.float32)
+    for k in range(min(3, OBS_WINDOW)):
+        key = f'{prefix}_{k}'
+        if key in state:
+            win[:, :, k] = state[key]
+    return win
+
+
 def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
     """Download new HLS images and update the compact rolling pixel state file.
 
@@ -402,13 +422,17 @@ def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
         state = dict(np.load(state_path))
         h, w = state['evi_0'].shape
         existing_doys = set(int(d) for d in state.get('seen_doys', []))
-        # recent_labels/recent_label_doys hold the per-observation predicted-label
-        # history keyed by observation DOY (see generate_web_outputs). A legacy
-        # state may have run-indexed recent_labels and no DOYs; reset both so the
-        # history rebuilds cleanly under the observation-keyed semantics.
-        if 'recent_labels' not in state or 'recent_label_doys' not in state:
-            state['recent_labels']     = np.full((h, w, 7), -1, dtype=np.int8)
-            state['recent_label_doys'] = np.full((h, w, 7), -1, dtype=np.int16)
+        # evi_w/ndvi_w/doy_w hold the last OBS_WINDOW observations per pixel, used
+        # to re-predict recent days for the mode_label_7day feature. Migrate a
+        # legacy state (only the 3-slot evi_0/1/2 window, or an older stored-label
+        # schema) by seeding the window from those three slots.
+        if 'evi_w' not in state:
+            state['evi_w']  = _seed_window(state, 'evi',  h, w)
+            state['ndvi_w'] = _seed_window(state, 'ndvi', h, w)
+            state['doy_w']  = _seed_window(state, 'doy',  h, w)
+        # Predictions are no longer persisted; drop any legacy label-history arrays.
+        state.pop('recent_labels', None)
+        state.pop('recent_label_doys', None)
         print(f'  Loaded existing pixel state ({len(existing_doys)} DOYs already processed)')
 
     # Fetch all image timestamps from GEE and filter to ones not yet processed
@@ -451,12 +475,12 @@ def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
             if state is None:
                 h, w = src.height, src.width
                 nan_hw = np.full((h, w), np.nan, dtype=np.float32)
+                nan_win = np.full((h, w, OBS_WINDOW), np.nan, dtype=np.float32)
                 state = {
                     'evi_0':  nan_hw.copy(), 'evi_1':  nan_hw.copy(), 'evi_2':  nan_hw.copy(),
                     'ndvi_0': nan_hw.copy(), 'ndvi_1': nan_hw.copy(), 'ndvi_2': nan_hw.copy(),
                     'doy_0':  nan_hw.copy(), 'doy_1':  nan_hw.copy(), 'doy_2':  nan_hw.copy(),
-                    'recent_labels':     np.full((h, w, 7), -1, dtype=np.int8),
-                    'recent_label_doys': np.full((h, w, 7), -1, dtype=np.int16),
+                    'evi_w':  nan_win.copy(), 'ndvi_w': nan_win.copy(), 'doy_w': nan_win.copy(),
                 }
 
             # Write reference rasters if not already saved
@@ -476,7 +500,7 @@ def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
         ndvi_new = data[1]
         valid = np.isfinite(evi_new) & (evi_new > 0) & np.isfinite(ndvi_new)
 
-        # Shift rolling window and insert new observation at index 0
+        # Shift the 3-slot rolling window and insert the new observation at index 0
         state['evi_2'][valid]  = state['evi_1'][valid]
         state['evi_1'][valid]  = state['evi_0'][valid]
         state['evi_0'][valid]  = evi_new[valid].astype(np.float32)
@@ -486,6 +510,14 @@ def update_pixel_state(collection, ma_forest, route_buffer, year, output_dir):
         state['doy_2'][valid]  = state['doy_1'][valid]
         state['doy_1'][valid]  = state['doy_0'][valid]
         state['doy_0'][valid]  = np.float32(doy)
+
+        # Shift the OBS_WINDOW-slot observation history (slot 0 = newest) for the
+        # mode_label_7day re-prediction. Only valid pixels advance.
+        for win, new in (('evi_w', evi_new), ('ndvi_w', ndvi_new), ('doy_w', None)):
+            arr = state[win]
+            arr[valid, 1:] = arr[valid, :-1]
+            arr[valid, 0]  = (np.float32(doy) if new is None
+                              else new[valid].astype(np.float32))
 
         existing_doys.add(doy)
         print(f'    Processed DOY {doy} ({len(valid[valid])} valid pixels)')
