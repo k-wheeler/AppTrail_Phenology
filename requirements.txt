@@ -10,4 +10,5 @@ matplotlib
 Pillow
 pyproj
 affine
+tzdata
 pytest

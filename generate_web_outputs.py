@@ -17,6 +17,7 @@ import datetime
 import io
 import json
 import os
+from zoneinfo import ZoneInfo
 
 import ee
 import matplotlib.pyplot as plt
@@ -32,6 +33,10 @@ from rasterio.crs import CRS as RioCRS
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 
 from constants import OUTPUT_DIR, LABEL_COLORS, LABEL_ORDER
+
+# The site reports the prediction for "today" in US Eastern time (the trail's
+# local time zone); ZoneInfo handles the EDT/EST switch automatically.
+EASTERN = ZoneInfo('America/New_York')
 from map_utils import _pred_grid_to_rgba
 from fit_greendown_curves import update_pixel_state
 from identify_locations import identify_route_buffer, identify_forests, identify_maroute
@@ -629,7 +634,7 @@ def main():
 
     os.makedirs(args.web_dir, exist_ok=True)
 
-    today     = datetime.date.today()
+    today     = datetime.datetime.now(EASTERN).date()
     today_str = today.isoformat()
     year      = today.year
     doy       = today.timetuple().tm_yday
