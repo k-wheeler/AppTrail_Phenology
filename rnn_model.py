@@ -2,8 +2,10 @@
 
 Trains on per-pixel-year observation sequences (many-to-many labeling) and
 predicts the phenological state (before/early/late/after) at each time step.
-Temperature features (cdd_accumulated, tmean_recent) are included here and
-must be enabled in build_data_table.py when building the RNN training data.
+A temperature feature (tmean_recent) is included here and must be enabled in
+build_data_table.py (include_temperature=True) when building the RNN training
+data.  (CDD was dropped: its current-year serving series only covers ~16 days,
+so older observations in the sequence were fed a misleading zero-fill.)
 
 Offline training only — the website continues to use the decision tree model
 until rnn_predict_for_date.py (future) is wired into generate_web_outputs.py.
@@ -35,7 +37,7 @@ from sklearn.metrics import classification_report
 RNN_FEATURE_COLS = [
     'EVI', 'NDVI', 'evi_delta', 'evi_delta2',
     'ndvi_delta', 'ndvi_delta2', 'day_length_hrs',
-    'doy_minus_avg_middle', 'cdd_accumulated', 'tmean_recent',
+    'doy_minus_avg_middle', 'tmean_recent',
 ]
 
 _LABEL_ORDER = ['before', 'early', 'late', 'after']
@@ -383,8 +385,8 @@ def predict_rnn_from_pixel_state(state_path, date_str, output_dir):
     """Predict phenological state using the trained LSTM and rolling pixel state.
 
     Assembles per-pixel observation sequences (oldest→newest) from the stored
-    observation window, computes the same 10 features used during training
-    (including CDD and daily mean temperature), normalizes, and runs the LSTM.
+    observation window, computes the same 9 features used during training
+    (including recent daily mean temperature), normalizes, and runs the LSTM.
     The prediction at the final (most recent) time step is used.
 
     Args:
@@ -406,7 +408,7 @@ def predict_rnn_from_pixel_state(state_path, date_str, output_dir):
         _build_cross_year_transition_lookup, _load_global_avg_middle,
         _load_lat_lon_arrays,
     )
-    from gridmet_utils import load_cdd_state, cdd_state_cum_at_doys, cdd_state_tmean_at_doys
+    from gridmet_utils import load_cdd_state, cdd_state_tmean_at_doys
 
     if not os.path.exists(os.path.join(output_dir, 'rnn_model.pt')):
         print('  RNN model not found — skipping RNN prediction.')
@@ -490,16 +492,15 @@ def predict_rnn_from_pixel_state(state_path, date_str, output_dir):
         all_lats_flat.extend([lat_i] * len(doy_seq))
         all_lons_flat.extend([lon_i] * len(doy_seq))
 
-    # Pass 2: vectorized CDD / tmean lookup for all valid observations at once
+    # Pass 2: vectorized T_mean lookup for all valid observations at once.
+    # Sample at doy-1 to match training (build_data_table samples temperature at
+    # the previous day, mirroring gridMET's ~1-day reporting lag).
     n_obs   = len(all_doys_flat)
-    all_cdd = np.zeros(n_obs, dtype=np.float32)
     all_tmn = np.zeros(n_obs, dtype=np.float32)
     if cdd_state is not None and n_obs > 0:
-        da = np.array(all_doys_flat)
+        da = np.array(all_doys_flat) - 1
         la = np.array(all_lats_flat)
         lo = np.array(all_lons_flat)
-        all_cdd = np.nan_to_num(
-            cdd_state_cum_at_doys(cdd_state, year, da, la, lo), nan=0.0).astype(np.float32)
         all_tmn = np.nan_to_num(
             cdd_state_tmean_at_doys(cdd_state, da, la, lo), nan=0.0).astype(np.float32)
 
@@ -527,8 +528,7 @@ def predict_rnn_from_pixel_state(state_path, date_str, output_dir):
             feats[2:, 5] = ndvi_seq[2:] - ndvi_seq[:-2]
         feats[:, 6] = _day_length_vec(doy_seq, info['lat'])
         feats[:, 7] = doy_seq - info['avg_m']
-        feats[:, 8] = all_cdd[ptr:ptr + T]
-        feats[:, 9] = all_tmn[ptr:ptr + T]
+        feats[:, 8] = all_tmn[ptr:ptr + T]
         ptr += T
         feats = np.nan_to_num((feats - norm_mean) / norm_std, nan=0.0)
         tensors.append(torch.tensor(feats, dtype=torch.float32))

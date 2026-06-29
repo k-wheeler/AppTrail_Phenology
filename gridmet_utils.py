@@ -23,9 +23,19 @@ KELVIN_OFFSET = 273.15
 HIST_FETCH_START_MONTH = 5
 HIST_FETCH_START_DAY   = 25
 
+# Current-year (serving) gridMET is seeded from the season start — the HLS
+# collection start (June 1) — so the cdd_state T_mean series covers every
+# observation the RNN may hold in its multi-month window, matching training.
+SEASON_START_MONTH = 6
+SEASON_START_DAY   = 1
+
 
 def _aug1_doy(year):
     return datetime.date(year, 8, 1).timetuple().tm_yday
+
+
+def _season_start_doy(year):
+    return datetime.date(year, SEASON_START_MONTH, SEASON_START_DAY).timetuple().tm_yday
 
 
 def _doy_to_date(year, doy):
@@ -329,25 +339,29 @@ def tmean_at_latlon(cdd_data, target_doy, lat_vals, lon_vals):
 # Public API — production (current year, GitHub-stored state)
 # ---------------------------------------------------------------------------
 
-# Number of most-recent days retained in the current-year cdd_state series.
-# Must comfortably exceed the 7-day mode window so any recent observation's
-# CDD/T_mean can be looked up by DOY.
-CDD_STATE_ROLLING_DAYS = 16
+# Days of CDD/T_mean history retained in the current-year cdd_state series.
+# Sized to span the whole monitoring season (June 1 → year end, ~215 days) so the
+# RNN can look up a real T_mean for any observation in its multi-month window,
+# not just the most recent few. (The decision tree's mode feature needs only ~7
+# days; the RNN sequence spans the full season.)
+CDD_STATE_ROLLING_DAYS = 220
 
 
 def update_cdd_state(year, route_buffer, output_dir):
     """Incrementally update the current-year CDD/T_mean state file.
 
-    cdd_state_{year}.npz stores a rolling per-DOY series for the most recent
-    CDD_STATE_ROLLING_DAYS days, so the Action can look up accumulated CDD and
-    daily mean temperature for any recent observation date (not just the latest):
+    cdd_state_{year}.npz stores a per-DOY series spanning the whole monitoring
+    season (seeded from the June 1 HLS collection start, up to
+    CDD_STATE_ROLLING_DAYS days), so the Action can look up accumulated CDD and
+    daily mean temperature for any observation in the RNN's window — not just the
+    latest few:
         recent_doys (K,) int32, recent_cdd_cum (K, h, w) float32 (cumulative CDD
         through each DOY), recent_tmean (K, h, w) float32, last_doy int32,
         transform (6,), crs_wkt str.
 
     Downloads only gridMET days not yet included (DOY > last_doy); re-running
     multiple times per day is safe. CDD accumulation starts Aug 1 (earlier days
-    contribute 0) but T_mean is recorded year-round.
+    contribute 0) but T_mean is recorded for the full season.
 
     Args:
         year: Integer year.
@@ -393,10 +407,15 @@ def update_cdd_state(year, route_buffer, output_dir):
             recent_tm   = [tmean_last]
         print(f'  CDD state loaded: last_doy={last_doy}, series len={len(recent_doys)}')
     else:
-        # First run: fetch enough recent days to seed the rolling series. If past
-        # Aug 1, start at Aug 1 so cumulative CDD is correct for the season.
-        if today_doy >= aug1_doy:
-            last_doy = aug1_doy - 1
+        # First run: seed from the season start (June 1, the HLS collection start)
+        # so the series carries a real T_mean for every observation the RNN may
+        # hold in its multi-month window. Cumulative CDD is still gated to Aug 1
+        # in the accumulation loop below; June–July days are stored with CDD = 0.
+        # Before the season starts there are no observations, so a short recent
+        # window suffices.
+        season_start_doy = _season_start_doy(year)
+        if today_doy >= season_start_doy:
+            last_doy = season_start_doy - 1
         else:
             last_doy = yesterday_doy - CDD_STATE_ROLLING_DAYS
 

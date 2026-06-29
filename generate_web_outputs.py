@@ -517,10 +517,9 @@ window['map{phase}'].on('click', function(e) {{
       Before, Early, Late, or After.</li>
       <li><strong>Neural network</strong> &mdash; A two-layer LSTM (long short-term memory) network
       processes the full sequence of satellite observations for each pixel, from the start of the
-      season to today. It uses 10 features &mdash; the same 9 as the decision tree plus daily
-      temperature signals (accumulated cool-degree-days and recent mean temperature) &mdash; and
-      learns how foliage change unfolds over time rather than treating each observation
-      independently.</li>
+      season to today. It uses the same vegetation and timing features as the decision tree plus a
+      recent daily mean temperature signal, and learns how foliage change unfolds over time rather
+      than treating each observation independently.</li>
       <li><strong>Daily update</strong> &mdash; Each morning, new imagery and temperature data
       are fetched, rolling observation windows are updated, and predictions from both models are
       recomputed for all ~15,000 forest pixels.</li>
