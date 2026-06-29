@@ -38,7 +38,10 @@ jobs:
         run: |
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          git add greendown_outputs/pixel_state_*.npz greendown_outputs/hls_indices_ref_*.tif
+          # Only hls_indices_ref_current.tif is committed; the per-year ref tif
+          # (hls_indices_ref_2*.tif) is gitignored — prediction falls back to the
+          # _current copy, so it never needs to be staged.
+          git add greendown_outputs/pixel_state_*.npz greendown_outputs/hls_indices_ref_current.tif
           git add greendown_outputs/cdd_state_*.npz 2>/dev/null || true
           git diff --cached --quiet || git commit -m "chore: update pixel state $(date -u +%F)"
           git push
