@@ -498,7 +498,7 @@ var FEAT_LABELS = {{
   'ndvi_delta2':          'NDVI Δ2 (vs 2nd prior obs)',
   'day_length_hrs':       'Day length (hrs)',
   'doy_minus_avg_middle': 'Days from avg mid-transition',
-  'cdd_accumulated':      'Cold degree-days (Aug 1→today)',
+  // 'cdd_accumulated':      'Cold degree-days (Aug 1→today)',   // CDD feature disabled
   'tmean_recent':         'Recent daily mean temp (°C)'
 }};
 var LABEL_COLORS = {json.dumps(LABEL_COLORS)};
