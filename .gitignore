@@ -36,3 +36,5 @@ web_outputs/
 qc_outputs/
 untitled.py
 Untitled.ipynb
+.claude/
+.DS_Store
