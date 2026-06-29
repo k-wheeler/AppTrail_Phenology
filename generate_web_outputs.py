@@ -20,6 +20,7 @@ import os
 from zoneinfo import ZoneInfo
 
 import ee
+import joblib
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import numpy as np
@@ -220,6 +221,61 @@ def _export_at_route(web_dir):
 # ---------------------------------------------------------------------------
 # HTML generation
 # ---------------------------------------------------------------------------
+
+# Human-readable feature names — kept in sync with the JS FEAT_LABELS popup dict.
+_FEAT_DISPLAY_NAMES = {
+    'EVI':                  'EVI',
+    'NDVI':                 'NDVI',
+    'evi_delta':            'EVI Δ1 (vs prior obs)',
+    'evi_delta2':           'EVI Δ2 (vs 2nd prior obs)',
+    'ndvi_delta':           'NDVI Δ1 (vs prior obs)',
+    'ndvi_delta2':          'NDVI Δ2 (vs 2nd prior obs)',
+    'day_length_hrs':       'Day length (hrs)',
+    'doy_minus_avg_middle': 'Days from avg mid-transition',
+    'mode_label_7day':      '7-day mode label',
+    'cdd_accumulated':      'Cold degree-days (Aug 1→today)',
+    'tmean_recent':         'Recent daily mean temp (°C)',
+}
+
+
+def _generate_feature_importance_png(output_dir, web_dir):
+    """Save a horizontal bar chart of decision-tree feature importances to web_dir."""
+    model_path = os.path.join(output_dir, 'decision_tree_model.joblib')
+    if not os.path.exists(model_path):
+        print('  Skipping feature importance chart — model not found.')
+        return
+    mdl = joblib.load(model_path)
+    names       = list(mdl.feature_names_in_)
+    importances = mdl.feature_importances_
+
+    display = [_FEAT_DISPLAY_NAMES.get(n, n) for n in names]
+    order   = np.argsort(importances)          # ascending → least important at bottom
+
+    fig, ax = plt.subplots(figsize=(6.5, 0.45 * len(names) + 0.7))
+    bars = ax.barh(
+        [display[i] for i in order],
+        [importances[i] for i in order],
+        color='#2c6b3f', alpha=0.82, height=0.6,
+    )
+    for bar, idx in zip(bars, order):
+        imp = importances[idx]
+        ax.text(imp + max(importances) * 0.012,
+                bar.get_y() + bar.get_height() / 2,
+                f'{imp:.3f}', va='center', ha='left', fontsize=8, color='#444')
+
+    ax.set_xlabel('Feature importance (fraction of splits)', fontsize=9)
+    ax.set_xlim(0, max(importances) * 1.18)
+    ax.tick_params(axis='y', labelsize=8.5)
+    ax.tick_params(axis='x', labelsize=8)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    fig.tight_layout()
+
+    out_path = os.path.join(web_dir, 'feature_importance.png')
+    fig.savefig(out_path, dpi=140, bbox_inches='tight', transparent=True)
+    plt.close(fig)
+    print(f'  Saved {out_path}')
+
 
 def _render_html(web_dir, meta):
     """Render the static index.html page for the GitHub Pages site.
@@ -430,15 +486,10 @@ window['map{phase}'].on('click', function(e) {{
       <li><strong>Greendown curves</strong> &mdash; A decreasing logistic curve is fitted to each
       pixel&rsquo;s EVI time series to estimate when foliage change starts, peaks, and ends,
       along with 95% confidence intervals.</li>
-      <li><strong>Temperature</strong> &mdash; Daily maximum and minimum air temperature
-      (gridMET, ~4 km) provide two features: accumulated cold degree-days (CDD) since
-      August 1 (each day contributes max(0, 5&minus;T<sub>mean</sub>&deg;C), capturing
-      cumulative chilling) and the most recent available daily mean temperature.</li>
       <li><strong>Machine learning</strong> &mdash; A decision tree classifier trained on 10 years
-      of labeled pixel-observations uses 11 features (EVI, NDVI, their recent changes, day length,
-      days relative to that pixel&rsquo;s historical average mid-transition date, the most
-      common predicted state over the past 7 days, accumulated cold degree-days since August 1,
-      and the most recent daily mean temperature) to assign one of four states:
+      of labeled pixel-observations uses 9 features (EVI, NDVI, their recent changes, day length,
+      days relative to that pixel&rsquo;s historical average mid-transition date, and the most
+      common predicted state over the past 7 days) to assign one of four states:
       Before, Early, Late, or After.</li>
       <li><strong>Daily update</strong> &mdash; Each morning, new imagery and temperature data
       are fetched, rolling observation windows are updated, and predictions are recomputed
@@ -463,6 +514,14 @@ window['map{phase}'].on('click', function(e) {{
       <li>Trail corridor: 50 m buffer around the Massachusetts AT route</li>
       <li>Spatial grid: UTM Zone 18N (EPSG:32618), 30 m resolution</li>
     </ul>
+
+    <h3>What drives the predictions?</h3>
+    <p>The chart below shows each input signal&rsquo;s <em>feature importance</em> &mdash; how
+    often the model used that signal when splitting pixels into phenological stages during
+    training. A higher value means the model relied on that signal more heavily; values
+    sum to 1.0 across all features.</p>
+    <img src="feature_importance.png" alt="Feature importance bar chart"
+         style="width:100%;max-width:580px;margin:8px 0 4px;display:block">
   </div>
 </div>
 <script>
@@ -538,8 +597,15 @@ mapToday.on('click', function(e) {{
   if (!p) return;
   var labelColor = LABEL_COLORS[p.label] || '#888';
   var rows = Object.keys(FEAT_LABELS).map(function(k) {{
-    var dec = (k === 'doy_minus_avg_middle') ? 0 : 2;
-    var val = p[k] === null || p[k] === undefined ? '&mdash;' : p[k].toFixed(dec);
+    var val;
+    if (p[k] === null || p[k] === undefined) {{
+      val = '&mdash;';
+    }} else if (k === 'doy_minus_avg_middle') {{
+      var d = Math.round(p[k]);
+      val = d < 0 ? Math.abs(d) + ' days before' : (d > 0 ? d + ' days after' : 'on avg');
+    }} else {{
+      val = p[k].toFixed(2);
+    }}
     return '<tr><td style="padding:2px 10px 2px 0;color:#555">' + FEAT_LABELS[k] + '</td>' +
            '<td style="text-align:right;font-variant-numeric:tabular-nums">' + val + '</td></tr>';
   }}).join('');
@@ -786,6 +852,10 @@ def main():
     # Generate average transition DOY maps (warped to match the prediction grid)
     print('\nChecking average transition DOY maps...')
     _ensure_avg_pngs(args.output_dir, args.web_dir, transform, crs)
+
+    # Render feature importance chart for the About tab
+    print('\nGenerating feature importance chart...')
+    _generate_feature_importance_png(args.output_dir, args.web_dir)
 
     # Render HTML
     print('\nRendering index.html...')
