@@ -4,6 +4,7 @@ import os
 import warnings
 import joblib
 import numpy as np
+import pandas as pd
 import rasterio
 
 from build_data_table import (
@@ -28,6 +29,22 @@ FEATURE_COLS = ['EVI', 'NDVI', 'evi_delta', 'evi_delta2',
                 # entries in generate_web_outputs.py, then retrain. ---
                 # 'cdd_accumulated', 'tmean_recent',
                 ]
+
+
+def _predict_aligned(mdl, X):
+    """Run mdl.predict with columns aligned to the model's training order by NAME.
+
+    X is built in FEATURE_COLS order. The training table appends mode_label_7day
+    last, so the model's column order can differ from FEATURE_COLS. Passing a
+    DataFrame reordered to mdl.feature_names_in_ makes prediction correct
+    regardless of FEATURE_COLS ordering (and silences sklearn's no-feature-names
+    warning). Falls back to positional prediction if the model has no names.
+    """
+    names = getattr(mdl, 'feature_names_in_', None)
+    if names is None:
+        return mdl.predict(X)
+    X_df = pd.DataFrame(X, columns=FEATURE_COLS)
+    return mdl.predict(X_df[list(names)])
 
 
 _LABEL_LIST   = ['before', 'early', 'late', 'after']
@@ -277,7 +294,7 @@ def predict_phenology(date_str, output_dir):
     X = np.where(np.isnan(X), 0.0, X)
 
     # Predict
-    preds = mdl.predict(X)
+    preds = _predict_aligned(mdl, X)
 
     # Map back to spatial grid
     pred_grid = np.full((h, w), 'unknown', dtype=object)
@@ -418,7 +435,7 @@ def predict_from_pixel_state(state_path, date_str, output_dir,
 
         Xn = (Xk - norm_mean) / norm_std
         Xn = np.where(np.isnan(Xn), 0.0, Xn)
-        preds_k = mdl.predict(Xn)
+        preds_k = _predict_aligned(mdl, Xn)
         enc = np.array([_LABEL_TO_INT.get(p, -1) for p in preds_k], dtype=np.int8)
         labels_slot[:, k] = np.where(slot_valid[:, k], enc, -1)
 
