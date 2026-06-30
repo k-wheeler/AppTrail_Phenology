@@ -2,6 +2,10 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.model_selection import train_test_split, GridSearchCV
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score, classification_report, mean_absolute_error
+from sklearn import tree
+import os
 
 def split_data(feature_df):
     """Split the feature table into 75/25 train/test sets.
@@ -20,6 +24,45 @@ def split_data(feature_df):
     x_train, x_test, y_train, y_test = train_test_split(predictors,response,random_state = 1234)
     
     return x_train, x_test, y_train, y_test
+
+def plot_decision_tree(mdl, x_train, MODEL_DIR):
+    fig, ax = plt.subplots(figsize=(40, 20))
+    feature_names = list(x_train.columns)
+    tree.plot_tree(mdl, feature_names=list(feature_names), max_depth = 3, filled=True, ax=ax)
+    fig.savefig(os.path.join(MODEL_DIR, 'decision_tree.png'), dpi=150, bbox_inches='tight')
+    plt.show()
+
+    # Plot feature importances
+    importances = mdl.feature_importances_
+    sorted_idx = sorted(range(len(importances)), key=lambda i: importances[i], reverse=True)
+
+    fig, ax = plt.subplots(figsize=(8, max(4, len(feature_names) * 0.4)))
+    ax.barh([feature_names[i] for i in sorted_idx], [importances[i] for i in sorted_idx])
+    ax.set_xlabel('Feature Importance (Gini)')
+    ax.set_title('Decision Tree Feature Importances')
+    ax.invert_yaxis()
+    plt.tight_layout()
+    fig.savefig(os.path.join(MODEL_DIR, 'feature_importances.png'), dpi=150, bbox_inches='tight')
+    plt.show()
+
+def evaluate_decision_tree(mdl, x_test, y_test, x_train, y_train):
+    # ----------------------------
+    # Test on test data
+    # ----------------------------
+    y_pred = mdl.predict(x_test)
+
+    # ----------------------------
+    # Evaluate model
+    # ----------------------------
+    print('\nTest Accuracy Score:')
+    print(accuracy_score(y_test, y_pred))
+    print(classification_report(y_test, y_pred))
+
+    #Check for overfitting by comparing accuracy of predicting training data to predicting test data
+    y_pred_train = mdl.predict(x_train)
+    print('\nTrain Accuracy Score:')
+    print(accuracy_score(y_train, y_pred_train))
+    print(classification_report(y_train, y_pred_train))
 
 
 def fit_tree(x_train, y_train, prune=False):
