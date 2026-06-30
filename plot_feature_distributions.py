@@ -22,9 +22,9 @@ COL_LABELS = {
     'ndvi_delta':     'NDVI Δ1',
     'ndvi_delta2':    'NDVI Δ2',
     'day_length_hrs':             'Day Length (hrs)',
-    'doy_minus_avg_start':  'DOY − Avg Start DOY (other years)',
-    'doy_minus_avg_middle': 'DOY − Avg Middle DOY (other years)',
-    'doy_minus_avg_end':    'DOY − Avg End DOY (other years)',
+    'doy_minus_avg_start':  'DOY − Avg Start DOY',
+    'doy_minus_avg_middle': 'DOY − Avg Middle DOY',
+    'doy_minus_avg_end':    'DOY − Avg End DOY',
 }
 
 

@@ -168,33 +168,38 @@ def _assign_label(doy, start, middle, end):
 
 
 def _add_mode_label_7day(df):
-    """Add a mode_label_7day column: ordinal mode of same-pixel labels in [doy-7, doy-1].
+    """Add a mode_label_7day column: mode label derived from the fitted curve over [doy-7, doy-1].
 
-    For each observation, looks at all prior observations of the same pixel in the
-    same year whose DOY falls within the 7-day window before the current DOY.
-    Labels are encoded ordinally (before=0, early=1, late=2, after=3). Returns NaN
-    where no prior observation exists within the window.
+    Because HLS revisit is ~8 days, actual prior observations within a 7-day window are
+    rare. Instead, labels for each of the 7 prior days are computed analytically from the
+    fitted transition dates (start, middle, end) using _assign_label, then the mode is
+    taken. This produces a non-NaN value for every row except the very start of the season
+    before any transition date data exists.
 
     Args:
-        df: DataFrame with columns year, doy, pixel_id, label.
+        df: DataFrame with columns year, doy, pixel_id, label, and the transition date
+            columns doy_minus_avg_start, doy_minus_avg_middle, doy_minus_avg_end plus
+            the per-year point estimates embedded via start/middle/end columns.
 
     Returns:
-        DataFrame with an additional mode_label_7day column (float, NaN-able).
+        DataFrame with an additional mode_label_7day column (float ordinal, NaN-able).
     """
     mode_map = {}
     for (_, _), grp in df.groupby(['year', 'pixel_id'], sort=False):
         grp_sorted = grp.sort_values('doy')
-        doys = grp_sorted['doy'].values
-        encoded = np.array([_LABEL_ENC[l] for l in grp_sorted['label'].values],
-                           dtype=np.intp)
+        doys   = grp_sorted['doy'].values
+        starts = grp_sorted['transition_start'].values
+        middles = grp_sorted['transition_middle'].values
+        ends   = grp_sorted['transition_end'].values
         for i, idx in enumerate(grp_sorted.index):
-            d = doys[i]
-            window = encoded[(doys >= d - 7) & (doys < d)]
-            if len(window) > 0:
-                counts = np.bincount(window, minlength=4)
-                mode_map[idx] = float(np.argmax(counts))
-            else:
-                mode_map[idx] = float('nan')
+            d = int(doys[i])
+            s, m, e = starts[i], middles[i], ends[i]
+            prior_labels = [
+                _LABEL_ENC[_assign_label(pd, s, m, e)]
+                for pd in range(d - 7, d)
+            ]
+            counts = np.bincount(prior_labels, minlength=4)
+            mode_map[idx] = float(np.argmax(counts))
     df = df.copy()
     df['mode_label_7day'] = pd.Series(mode_map)
     return df
@@ -264,7 +269,9 @@ def build_feature_table(data_dir, greendown_dir, years, max_width=MAX_CI_WIDTH,
             if not (np.isfinite(start) and np.isfinite(middle) and np.isfinite(end)):
                 continue
 
-            # Cross-year average transition DOYs (other years with CI width <= 30 days)
+            # Cross-year average transition DOYs (other years with CI width <= threshold).
+            # Falls back to the current year's own value when no other years are available
+            # (e.g. pixel passes CI filter in only one year).
             avg_doys = {}
             for phase in phases:
                 vals = [
@@ -272,7 +279,12 @@ def build_feature_table(data_dir, greendown_dir, years, max_width=MAX_CI_WIDTH,
                     for yr in cross_year_lookup
                     if yr != year and np.isfinite(cross_year_lookup[yr][phase][r, c])
                 ]
-                avg_doys[phase] = float(np.mean(vals)) if vals else float('nan')
+                if vals:
+                    avg_doys[phase] = float(np.mean(vals))
+                elif np.isfinite(points[phase][r, c]):
+                    avg_doys[phase] = float(points[phase][r, c])
+                else:
+                    avg_doys[phase] = float('nan')
 
             lat = lat_array[r, c]
             lon = lon_array[r, c]
@@ -320,6 +332,9 @@ def build_feature_table(data_dir, greendown_dir, years, max_width=MAX_CI_WIDTH,
                     'doy_minus_avg_start':  int(doy) - avg_doys['start'],
                     'doy_minus_avg_middle': int(doy) - avg_doys['middle'],
                     'doy_minus_avg_end':    int(doy) - avg_doys['end'],
+                    'transition_start':          float(start),
+                    'transition_middle':         float(middle),
+                    'transition_end':            float(end),
                     'label':                     _assign_label(doy, start, middle, end),
                 }
                 if include_temperature:
@@ -332,12 +347,14 @@ def build_feature_table(data_dir, greendown_dir, years, max_width=MAX_CI_WIDTH,
         'evi_delta', 'evi_delta2', 'ndvi_delta', 'ndvi_delta2',
         'day_length_hrs',
         'doy_minus_avg_start', 'doy_minus_avg_middle', 'doy_minus_avg_end',
+        'transition_start', 'transition_middle', 'transition_end',
         'label',
     ]
     temp_cols = ['cdd_accumulated', 'tmean_recent'] if include_temperature else []
     df = pd.DataFrame(rows, columns=base_cols[:-1] + temp_cols + ['label'])
     print(f'\nTotal labeled phenology observations: {len(df)}')
     df = _add_mode_label_7day(df)
+    df = df.drop(columns=['transition_start', 'transition_middle', 'transition_end'])
     if not retain_pixel_id:
         df = df.drop(columns=['pixel_id'])
     return df

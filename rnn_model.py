@@ -26,6 +26,7 @@ Usage in Main.ipynb (Cell 2):
 import json
 import os
 import random
+import time
 
 import numpy as np
 import torch
@@ -252,21 +253,31 @@ def collate_rnn_batch(batch):
 # ---------------------------------------------------------------------------
 
 def train_rnn(model, train_seqs, val_seqs, epochs=60, lr=1e-3,
-              batch_size=64, device='cpu'):
-    """Train the RNN model and return it.
+              batch_size=64, device='cpu', early_stopping=False,
+              patience=10, L1_regular=False, l1_lambda=1e-4):
+    """Train the RNN model and return it with per-epoch loss/accuracy history.
 
     Args:
-        model:      RNNPhenologyModel instance (weights initialised).
-        train_seqs: Normalized training sequences.
-        val_seqs:   Normalized validation sequences.
-        epochs:     Number of full passes over the training set.
-        lr:         Adam learning rate.
-        batch_size: Sequences per batch.
-        device:     'cpu' or 'cuda'.
+        model:          RNNPhenologyModel instance (weights initialised).
+        train_seqs:     Normalized training sequences.
+        val_seqs:       Normalized validation sequences.
+        epochs:         Maximum number of full passes over the training set.
+        lr:             Adam learning rate.
+        batch_size:     Sequences per batch.
+        device:         'cpu' or 'cuda'.
+        early_stopping: If True, stop training when val_loss has not improved
+                        for `patience` consecutive epochs and restore the best
+                        weights seen so far.
+        patience:       Number of epochs without val_loss improvement before
+                        stopping (only used when early_stopping=True).
+        L1_regular:     If True, add L1 regularization to the loss.
+        l1_lambda:      Regularization strength (only used when L1_regular=True).
 
     Returns:
-        Trained model (on `device`).
+        Tuple of (trained model, history, training_time_sec).
     """
+    import copy
+
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss(ignore_index=-1)
@@ -275,6 +286,13 @@ def train_rnn(model, train_seqs, val_seqs, epochs=60, lr=1e-3,
         _SequenceDataset(train_seqs), batch_size=batch_size,
         shuffle=True, collate_fn=collate_rnn_batch,
     )
+
+    history = {'train_loss': [], 'val_loss': [], 'val_acc': []}
+    t_start = time.time()
+
+    best_val_loss   = float('inf')
+    best_weights    = None
+    epochs_no_improve = 0
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -290,19 +308,79 @@ def train_rnn(model, train_seqs, val_seqs, epochs=60, lr=1e-3,
                 logits.reshape(-1, logits.size(-1)),
                 padded_labels.reshape(-1),
             )
+            if L1_regular:
+                l1_penalty = sum(p.abs().sum() for p in model.parameters())
+                loss = loss + l1_lambda * l1_penalty
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             total_loss += loss.item()
             n_batches  += 1
 
+        epoch_loss = total_loss / max(n_batches, 1)
+        val_loss   = _eval_loss(model, val_seqs, device, batch_size)
+        val_acc    = _eval_accuracy(model, val_seqs, device, batch_size)
+        history['train_loss'].append(epoch_loss)
+        history['val_loss'].append(val_loss)
+        history['val_acc'].append(val_acc)
+
         if epoch % 10 == 0 or epoch == 1:
-            val_acc = _eval_accuracy(model, val_seqs, device, batch_size)
             print(f'  Epoch {epoch:3d}/{epochs}  '
-                  f'loss={total_loss / max(n_batches, 1):.4f}  '
+                  f'train_loss={epoch_loss:.4f}  '
+                  f'val_loss={val_loss:.4f}  '
                   f'val_acc={val_acc:.4f}')
 
-    return model
+        if early_stopping:
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_weights  = copy.deepcopy(model.state_dict())
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+                if epochs_no_improve >= patience:
+                    print(f'  Early stopping at epoch {epoch} '
+                          f'(no val_loss improvement for {patience} epochs)')
+                    model.load_state_dict(best_weights)
+                    break
+
+    training_time_sec = time.time() - t_start
+    print(f'  Training time: {training_time_sec / 60:.1f} min')
+    return model, history, training_time_sec
+
+
+def plot_rnn_training_curves(history, filename_ext='', model_dir=None):
+    """Plot training and validation loss on the same graph vs epoch.
+
+    Args:
+        history:      Dict returned by train_rnn with keys 'train_loss', 'val_loss',
+                      and 'val_acc'.
+        filename_ext: Optional suffix used to label the plot title and output filename.
+        model_dir:    If provided, saves the plot as rnn_training_curves{filename_ext}.png
+                      in that directory. Otherwise just displays it.
+    """
+    import matplotlib.pyplot as plt
+
+    epochs = range(1, len(history['train_loss']) + 1)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    ax.plot(epochs, history['train_loss'], color='steelblue', label='Train loss')
+    if 'val_loss' in history:
+        ax.plot(epochs, history['val_loss'], color='darkorange', label='Val loss')
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Loss')
+    ax.set_title(f'RNN Training Curves{filename_ext}')
+    ax.legend()
+
+    plt.tight_layout()
+
+    if model_dir is not None:
+        import os
+        out = os.path.join(model_dir, f'rnn_training_curves{filename_ext}.png')
+        fig.savefig(out, dpi=150, bbox_inches='tight')
+        print(f'  Saved {out}')
+
+    plt.show()
 
 
 def evaluate_rnn(model, sequences, device='cpu', batch_size=64):
@@ -337,17 +415,19 @@ def evaluate_rnn(model, sequences, device='cpu', batch_size=64):
 # Persistence
 # ---------------------------------------------------------------------------
 
-def save_rnn_model(model, norm_stats, model_dir):
-    """Save model weights, norm stats, and architecture config.
+def save_rnn_model(model, norm_stats, model_dir, history=None, training_time_sec=None, filename_ext=""):
+    """Save model weights, norm stats, architecture config, and optional training history.
 
-    Writes three files to model_dir:
-        rnn_model.pt          — PyTorch state dict
-        rnn_norm_stats.json   — per-feature mean/std
-        rnn_model_config.json — architecture params for load_rnn_model
+    Writes to model_dir:
+        rnn_model{ext}.pt            — PyTorch state dict
+        rnn_norm_stats{ext}.json     — per-feature mean/std
+        rnn_model_config{ext}.json   — architecture params for load_rnn_model
+        rnn_history{ext}.json        — train_loss, val_loss, val_acc per epoch, and
+                                       training_time_sec (if history or time provided)
     """
     os.makedirs(model_dir, exist_ok=True)
-    torch.save(model.state_dict(), os.path.join(model_dir, 'rnn_model.pt'))
-    with open(os.path.join(model_dir, 'rnn_norm_stats.json'), 'w') as f:
+    torch.save(model.state_dict(), os.path.join(model_dir, f'rnn_model{filename_ext}.pt'))
+    with open(os.path.join(model_dir, f'rnn_norm_stats{filename_ext}.json'), 'w') as f:
         json.dump(norm_stats, f, indent=2)
     config = {
         'input_size':  model.lstm.input_size,
@@ -355,26 +435,41 @@ def save_rnn_model(model, norm_stats, model_dir):
         'num_layers':  model.num_layers,
         'num_classes': model.head.out_features,
     }
-    with open(os.path.join(model_dir, 'rnn_model_config.json'), 'w') as f:
+    with open(os.path.join(model_dir, f'rnn_model_config{filename_ext}.json'), 'w') as f:
         json.dump(config, f, indent=2)
-    print(f'  Saved rnn_model.pt + rnn_norm_stats.json + rnn_model_config.json → {model_dir}')
+    saved = f'rnn_model{filename_ext}.pt + rnn_norm_stats{filename_ext}.json + rnn_model_config{filename_ext}.json'
+    if history is not None or training_time_sec is not None:
+        history_payload = dict(history) if history is not None else {}
+        if training_time_sec is not None:
+            history_payload['training_time_sec'] = training_time_sec
+        with open(os.path.join(model_dir, f'rnn_history{filename_ext}.json'), 'w') as f:
+            json.dump(history_payload, f, indent=2)
+        saved += f' + rnn_history{filename_ext}.json'
+    print(f'  Saved {saved} → {model_dir}')
 
 
-def load_rnn_model(model_dir):
-    """Load RNN model and norm stats from model_dir.
+def load_rnn_model(model_dir, filename_ext=""):
+    """Load RNN model, norm stats, and training history (if saved) from model_dir.
 
     Returns:
-        (model, norm_stats): RNNPhenologyModel in eval mode, norm stats dict.
+        (model, norm_stats, history): RNNPhenologyModel in eval mode, norm stats dict,
+        and history dict with 'train_loss'/'val_acc' lists (or None if not found).
     """
-    with open(os.path.join(model_dir, 'rnn_model_config.json')) as f:
+    with open(os.path.join(model_dir, f'rnn_model_config{filename_ext}.json')) as f:
         config = json.load(f)
     model = RNNPhenologyModel(**config)
     model.load_state_dict(
-        torch.load(os.path.join(model_dir, 'rnn_model.pt'), map_location='cpu'))
+        torch.load(os.path.join(model_dir, f'rnn_model{filename_ext}.pt'), map_location='cpu'))
     model.eval()
-    with open(os.path.join(model_dir, 'rnn_norm_stats.json')) as f:
+    with open(os.path.join(model_dir, f'rnn_norm_stats{filename_ext}.json')) as f:
         norm_stats = json.load(f)
-    return model, norm_stats
+    history_path = os.path.join(model_dir, f'rnn_history{filename_ext}.json')
+    if os.path.exists(history_path):
+        with open(history_path) as f:
+            history = json.load(f)
+    else:
+        history = None
+    return model, norm_stats, history
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +477,7 @@ def load_rnn_model(model_dir):
 # ---------------------------------------------------------------------------
 
 def predict_rnn_from_pixel_state(state_path, date_str, data_dir=None,
-                                  greendown_dir=None, model_dir=None):
+                                  greendown_dir=None, model_dir=None,filename_ext=""):
     """Predict phenological state using the trained LSTM and rolling pixel state.
 
     Assembles per-pixel observation sequences (oldest→newest) from the stored
@@ -419,7 +514,7 @@ def predict_rnn_from_pixel_state(state_path, date_str, data_dir=None,
     if model_dir is None:
         model_dir = MODEL_DIR
 
-    if not os.path.exists(os.path.join(model_dir, 'rnn_model.pt')):
+    if not os.path.exists(os.path.join(model_dir, f'rnn_model{filename_ext}.pt')):
         print('  RNN model not found — skipping RNN prediction.')
         return None
 
@@ -594,3 +689,28 @@ def _eval_accuracy(model, sequences, device, batch_size):
             total   += mask.sum().item()
     model.train()
     return correct / max(total, 1)
+
+
+def _eval_loss(model, sequences, device, batch_size):
+    """Compute mean cross-entropy loss over sequences for logging during training."""
+    criterion = nn.CrossEntropyLoss(ignore_index=-1)
+    model.eval()
+    total_loss = 0.0
+    n_batches  = 0
+    loader = DataLoader(
+        _SequenceDataset(sequences), batch_size=batch_size,
+        shuffle=False, collate_fn=collate_rnn_batch,
+    )
+    with torch.no_grad():
+        for packed, padded_labels, _ in loader:
+            packed        = _move_packed(packed, device)
+            padded_labels = padded_labels.to(device)
+            logits, _     = model(packed)
+            loss = criterion(
+                logits.reshape(-1, logits.size(-1)),
+                padded_labels.reshape(-1),
+            )
+            total_loss += loss.item()
+            n_batches  += 1
+    model.train()
+    return total_loss / max(n_batches, 1)

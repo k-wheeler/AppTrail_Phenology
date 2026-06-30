@@ -142,10 +142,17 @@ def edit_feature_table(feature_df, greendown_dir, model_dir):
             )
 
     # Delta NaNs occur at the start of a pixel's series (no prior observation to
-    # difference against). Rather than dropping these rows, keep them and fill the
-    # NaNs with normalized 0 after z-scoring (below) — this mirrors serving, which
-    # feeds delta=normalized-0 for pixels with too few prior observations
-    # (predict_for_date: X = np.where(np.isnan(X), 0.0, X)).
+    # difference against). Drop these rows so the model never trains on imputed
+    # delta values.
+    delta_cols = [c for c in ['evi_delta', 'evi_delta2', 'ndvi_delta', 'ndvi_delta2']
+                  if c in feature_df.columns]
+    if delta_cols:
+        n_before = len(feature_df)
+        feature_df = feature_df.dropna(subset=delta_cols)
+        n_dropped = n_before - len(feature_df)
+        if n_dropped:
+            print(f'  Dropped {n_dropped} rows with NaN delta values '
+                  f'({100 * n_dropped / n_before:.1f}% of rows)')
 
     #Remove columns not needed for models
     feature_df = feature_df.drop(columns=['doy', 'doy_minus_avg_start', 'doy_minus_avg_end', 'year', 'date'])
@@ -162,9 +169,6 @@ def edit_feature_table(feature_df, greendown_dir, model_dir):
     col_means = feature_df[numeric_cols].mean()
     col_stds  = feature_df[numeric_cols].std()
     feature_df[numeric_cols] = (feature_df[numeric_cols] - col_means) / col_stds
-    # Fill any remaining NaN (the start-of-series deltas) with normalized 0,
-    # exactly as serving does after applying norm_stats.
-    feature_df[numeric_cols] = feature_df[numeric_cols].fillna(0.0)
     feature_df['label'] = labels.loc[feature_df.index]
 
     # Save normalization statistics so prediction code can apply the same scaling

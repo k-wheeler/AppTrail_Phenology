@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import accuracy_score, classification_report, mean_absolute_error
 from sklearn import tree
 import os
+import time
 
 def split_data(feature_df):
     """Split the feature table into 75/25 train/test sets.
@@ -77,9 +78,10 @@ def fit_tree(x_train, y_train, prune=False):
         prune: If True, run GridSearchCV to select hyperparameters.
 
     Returns:
-        Fitted DecisionTreeClassifier.
+        Tuple of (fitted DecisionTreeClassifier, training_time_sec).
     """
     clf = DecisionTreeClassifier(random_state=1234)
+    t_start = time.time()
 
     #Without pruning
     if not prune:
@@ -102,4 +104,6 @@ def fit_tree(x_train, y_train, prune=False):
         gcv.fit(x_train, y_train)
         mdl = gcv.best_estimator_
 
-    return mdl
+    training_time_sec = time.time() - t_start
+    print(f'  Training time: {training_time_sec:.1f} sec')
+    return mdl, training_time_sec
