@@ -559,6 +559,7 @@ window['map{phase}'].on('click', function(e) {{
   </div>
 </div>
 <script>
+console.log('[AppTrail] Page built for date:', '{date_str}', '| rendered at:', new Date().toISOString());
 function showTab(name, el) {{
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
