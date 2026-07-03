@@ -63,3 +63,35 @@ jobs:
 
       - name: Health check
         run: python health_check.py --data-dir ./Data --web-dir ./web_outputs
+
+      # GitHub's built-in "pages build and deployment" workflow is fire-and-forget
+      # and its deploy job intermittently fails with "Deployment failed, try again
+      # later", leaving the live site stale. This step waits for the latest Pages
+      # run on the website repo to finish and auto-retries failed deploys.
+      - name: Verify Pages deployment (auto-retry on failure)
+        env:
+          TOKEN: ${{ secrets.PAGES_REPO_TOKEN }}
+          REPO: ${{ secrets.PAGES_REPO }}
+        run: |
+          api() { curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "$@"; }
+          for attempt in 1 2 3; do
+            # Wait (up to 5 min) for the latest Pages run to complete
+            for i in $(seq 1 30); do
+              run=$(api "https://api.github.com/repos/$REPO/actions/runs?per_page=1")
+              status=$(echo "$run" | jq -r '.workflow_runs[0].status')
+              [ "$status" = "completed" ] && break
+              sleep 10
+            done
+            run_id=$(echo "$run" | jq -r '.workflow_runs[0].id')
+            conclusion=$(echo "$run" | jq -r '.workflow_runs[0].conclusion')
+            echo "Pages run $run_id concluded: $conclusion (attempt $attempt)"
+            if [ "$conclusion" = "success" ]; then
+              echo "Pages deployment succeeded."
+              exit 0
+            fi
+            echo "Re-running failed Pages deploy..."
+            api -X POST "https://api.github.com/repos/$REPO/actions/runs/$run_id/rerun-failed-jobs" > /dev/null
+            sleep 30
+          done
+          echo "::error::Pages deployment still failing after 3 attempts — site may be stale."
+          exit 1
