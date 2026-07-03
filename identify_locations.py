@@ -22,9 +22,13 @@ def _compute_ma_route():
     )
 
 
-def _compute_route_buffer():
-    """Return a 50m buffer around the simplified MA AT route geometry."""
-    return _compute_ma_route().simplify(10).buffer(50)
+def _compute_route_buffer(buffer_m=50):
+    """Return a buffer around the simplified MA AT route geometry.
+
+    Args:
+        buffer_m: Buffer radius in metres. Default 50 (serving). Use 100 for training.
+    """
+    return _compute_ma_route().simplify(10).buffer(buffer_m)
 
 
 def _compute_forest_mask(route_buffer):
@@ -46,14 +50,22 @@ def _compute_forest_mask(route_buffer):
     return forest.clip(route_buffer)
 
 
-def identify_route_buffer():
-    """Return the 50m buffered MA AT route geometry for use as a spatial filter."""
-    return _compute_route_buffer()
+def identify_route_buffer(buffer_m=50):
+    """Return the buffered MA AT route geometry for use as a spatial filter.
+
+    Args:
+        buffer_m: Buffer radius in metres. Default 50 (serving). Use 100 for training.
+    """
+    return _compute_route_buffer(buffer_m)
 
 
-def identify_forests():
-    """Return a binary GEE Image masking deciduous and mixed forest pixels within the route buffer."""
-    route_buffer = _compute_route_buffer()
+def identify_forests(buffer_m=50):
+    """Return a binary GEE Image masking deciduous and mixed forest pixels within the route buffer.
+
+    Args:
+        buffer_m: Buffer radius in metres. Default 50 (serving). Use 100 for training.
+    """
+    route_buffer = _compute_route_buffer(buffer_m)
     return _compute_forest_mask(route_buffer)
 
 

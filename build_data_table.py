@@ -206,7 +206,8 @@ def _add_mode_label_7day(df):
 
 
 def build_feature_table(data_dir, greendown_dir, years, max_width=MAX_CI_WIDTH,
-                        retain_pixel_id=False, include_temperature=False):
+                        retain_pixel_id=False, include_temperature=False,
+                        spatial_mask=None):
     """Build a labeled feature table from EVI/NDVI time series for qualifying pixel-years.
 
     Filters to pixel-years where all three CI widths are < max_width days, then labels
@@ -221,6 +222,9 @@ def build_feature_table(data_dir, greendown_dir, years, max_width=MAX_CI_WIDTH,
             (needed for RNN sequence construction). Default False (DT pipeline).
         include_temperature: If True, compute and include cdd_accumulated and
             tmean_recent columns (from gridMET). Default False (DT pipeline).
+        spatial_mask: Optional boolean numpy array of shape (h, w) matching the CI-width
+            GeoTIFF grid. When provided, only pixels where spatial_mask is True are
+            included. Default None (all CI-qualifying pixels included).
 
     Returns:
         DataFrame with columns: year, date, doy, [pixel_id], EVI, NDVI, evi_delta,
@@ -243,6 +247,9 @@ def build_feature_table(data_dir, greendown_dir, years, max_width=MAX_CI_WIDTH,
         for phase in phases:
             arr = year_widths[phase]
             mask &= np.isfinite(arr) & (arr < max_width)
+
+        if spatial_mask is not None:
+            mask &= spatial_mask
 
         if not mask.any():
             print(f'  {year}: no qualifying pixels')
@@ -335,6 +342,9 @@ def build_feature_table(data_dir, greendown_dir, years, max_width=MAX_CI_WIDTH,
                     'transition_start':          float(start),
                     'transition_middle':         float(middle),
                     'transition_end':            float(end),
+                    'ci_width_start':            float(year_widths['start'][r, c]),
+                    'ci_width_middle':           float(year_widths['middle'][r, c]),
+                    'ci_width_end':              float(year_widths['end'][r, c]),
                     'label':                     _assign_label(doy, start, middle, end),
                 }
                 if include_temperature:
@@ -348,15 +358,21 @@ def build_feature_table(data_dir, greendown_dir, years, max_width=MAX_CI_WIDTH,
         'day_length_hrs',
         'doy_minus_avg_start', 'doy_minus_avg_middle', 'doy_minus_avg_end',
         'transition_start', 'transition_middle', 'transition_end',
+        'ci_width_start', 'ci_width_middle', 'ci_width_end',
         'label',
     ]
     temp_cols = ['cdd_accumulated', 'tmean_recent'] if include_temperature else []
     df = pd.DataFrame(rows, columns=base_cols[:-1] + temp_cols + ['label'])
     print(f'\nTotal labeled phenology observations: {len(df)}')
     df = _add_mode_label_7day(df)
-    df = df.drop(columns=['transition_start', 'transition_middle', 'transition_end'])
+    # When retain_pixel_id=True (RNN path), keep transition_*, ci_width_*, and pixel_id
+    # so build_rnn_sequences can compute soft labels. For the DT path, drop everything.
     if not retain_pixel_id:
-        df = df.drop(columns=['pixel_id'])
+        df = df.drop(columns=[
+            'pixel_id',
+            'transition_start', 'transition_middle', 'transition_end',
+            'ci_width_start', 'ci_width_middle', 'ci_width_end',
+        ])
     return df
 
 

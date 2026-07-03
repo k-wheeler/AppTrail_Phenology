@@ -31,6 +31,7 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, pad_sequence
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import classification_report
@@ -83,18 +84,22 @@ class RNNPhenologyModel(nn.Module):
 # Data preparation
 # ---------------------------------------------------------------------------
 
-def build_rnn_sequences(feature_df):
+def build_rnn_sequences(feature_df, use_soft_labels=False):
     """Reshape a flat per-observation DataFrame into per-pixel-year sequences.
 
     Args:
         feature_df: DataFrame returned by
             build_feature_table(..., retain_pixel_id=True, include_temperature=True).
             Required columns: pixel_id, year, doy, all RNN_FEATURE_COLS, label.
+        use_soft_labels: If True and the CI-width and transition-date columns are
+            present (retain_pixel_id=True path), compute probabilistic labels
+            encoding boundary uncertainty via _compute_soft_label. Falls back to
+            hard labels when required columns are absent.
 
     Returns:
         List of (feature_array, label_array) tuples, one per pixel-year.
-        feature_array: float32 ndarray of shape (seq_len, len(RNN_FEATURE_COLS)).
-        label_array:   int64  ndarray of shape (seq_len,), values 0–3.
+        Hard labels: label_array is int64  ndarray of shape (seq_len,), values 0–3.
+        Soft labels: label_array is float32 ndarray of shape (seq_len, 4).
     """
     df = feature_df.copy()
 
@@ -107,14 +112,30 @@ def build_rnn_sequences(feature_df):
         if col in df.columns:
             df[col] = df[col].fillna(df[col].mean())
 
+    _soft_cols = ['doy', 'transition_start', 'transition_middle', 'transition_end',
+                  'ci_width_start', 'ci_width_middle', 'ci_width_end']
+    can_soft = use_soft_labels and all(c in df.columns for c in _soft_cols)
+    if use_soft_labels and not can_soft:
+        print('  Warning: soft label columns not found; falling back to hard labels.')
+
     label_int = df['label'].map(_LABEL_TO_INT)
 
     sequences = []
     for (year, pid), grp in df.groupby(['year', 'pixel_id'], sort=False):
         grp = grp.sort_values('doy')
-        feats  = grp[RNN_FEATURE_COLS].values.astype(np.float32)
-        labels = label_int.loc[grp.index].values.astype(np.int64)
-        sequences.append((feats, labels))
+        feats = grp[RNN_FEATURE_COLS].values.astype(np.float32)
+        if can_soft:
+            label_arr = np.stack([
+                _compute_soft_label(
+                    row['doy'],
+                    row['transition_start'], row['transition_middle'], row['transition_end'],
+                    row['ci_width_start'],   row['ci_width_middle'],   row['ci_width_end'],
+                )
+                for _, row in grp.iterrows()
+            ])  # (seq_len, 4) float32
+        else:
+            label_arr = label_int.loc[grp.index].values.astype(np.int64)
+        sequences.append((feats, label_arr))
 
     return sequences
 
@@ -225,8 +246,10 @@ class _SequenceDataset(Dataset):
 
     def __getitem__(self, idx):
         feats, labels = self.sequences[idx]
-        return (torch.tensor(feats,  dtype=torch.float32),
-                torch.tensor(labels, dtype=torch.long))
+        label_tensor = (torch.tensor(labels, dtype=torch.float32)
+                        if labels.ndim == 2
+                        else torch.tensor(labels, dtype=torch.long))
+        return torch.tensor(feats, dtype=torch.float32), label_tensor
 
 
 def collate_rnn_batch(batch):
@@ -241,8 +264,13 @@ def collate_rnn_batch(batch):
     feat_tensors  = [x[0] for x in batch]
     label_tensors = [x[1] for x in batch]
     lengths = torch.tensor([len(f) for f in feat_tensors], dtype=torch.long)
-    padded_feats  = pad_sequence(feat_tensors,  batch_first=True, padding_value=0.0)
-    padded_labels = pad_sequence(label_tensors, batch_first=True, padding_value=-1)
+    padded_feats = pad_sequence(feat_tensors, batch_first=True, padding_value=0.0)
+    if label_tensors[0].dim() == 2:
+        # Soft labels (seq_len, 4): pad with zero rows; masked by zero-sum check
+        padded_labels = pad_sequence(label_tensors, batch_first=True, padding_value=0.0)
+    else:
+        # Hard labels (seq_len,): pad with -1; masked by ignore_index=-1
+        padded_labels = pad_sequence(label_tensors, batch_first=True, padding_value=-1)
     packed = pack_padded_sequence(padded_feats, lengths.cpu(),
                                   batch_first=True, enforce_sorted=True)
     return packed, padded_labels, lengths
@@ -304,10 +332,15 @@ def train_rnn(model, train_seqs, val_seqs, epochs=60, lr=1e-3,
 
             optimizer.zero_grad()
             logits, _ = model(packed)
-            loss = criterion(
-                logits.reshape(-1, logits.size(-1)),
-                padded_labels.reshape(-1),
-            )
+            if padded_labels.dim() == 3:  # soft labels (batch, max_len, 4)
+                log_probs = F.log_softmax(logits, dim=-1)
+                mask_s = padded_labels.sum(dim=-1) > 0
+                loss = -(padded_labels * log_probs).sum(dim=-1)[mask_s].mean()
+            else:
+                loss = criterion(
+                    logits.reshape(-1, logits.size(-1)),
+                    padded_labels.reshape(-1),
+                )
             if L1_regular:
                 l1_penalty = sum(p.abs().sum() for p in model.parameters())
                 loss = loss + l1_lambda * l1_penalty
@@ -400,9 +433,14 @@ def evaluate_rnn(model, sequences, device='cpu', batch_size=64):
             packed = _move_packed(packed, device)
             logits, _ = model(packed)
             preds = logits.argmax(dim=-1).cpu()
-            mask  = padded_labels != -1
+            if padded_labels.dim() == 3:  # soft labels
+                true_cls = padded_labels.argmax(dim=-1).cpu()
+                mask = padded_labels.sum(dim=-1) > 0
+            else:
+                true_cls = padded_labels
+                mask = padded_labels != -1
             all_preds.extend(preds[mask].tolist())
-            all_true.extend(padded_labels[mask].tolist())
+            all_true.extend(true_cls[mask].tolist())
 
     print(classification_report(all_true, all_preds,
                                  target_names=_LABEL_ORDER, zero_division=0))
@@ -660,6 +698,31 @@ def predict_rnn_from_pixel_state(state_path, date_str, data_dir=None,
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+def _compute_soft_label(doy, start, middle, end, ci_start, ci_middle, ci_end):
+    """Compute a probabilistic label distribution from transition dates and CI widths.
+
+    Treats each transition boundary as normally distributed with σ = CI_width / (2×1.96),
+    then derives class probabilities via the standard normal CDF.
+
+    Returns:
+        float32 array of shape (4,) summing to 1: [P(before), P(early), P(late), P(after)].
+    """
+    from scipy.stats import norm as _norm
+    _sigma = lambda ci: max(float(ci) / (2 * 1.96), 1e-6)
+    p_past_start  = _norm.cdf(doy, loc=start,  scale=_sigma(ci_start))
+    p_past_middle = _norm.cdf(doy, loc=middle, scale=_sigma(ci_middle))
+    p_past_end    = _norm.cdf(doy, loc=end,    scale=_sigma(ci_end))
+    probs = np.array([
+        1.0 - p_past_start,
+        p_past_start  - p_past_middle,
+        p_past_middle - p_past_end,
+        p_past_end,
+    ], dtype=np.float32)
+    probs = np.clip(probs, 0.0, None)
+    total = probs.sum()
+    return probs / total if total > 0 else np.full(4, 0.25, dtype=np.float32)
+
+
 def _move_packed(packed, device):
     """Move a PackedSequence to `device`."""
     from torch.nn.utils.rnn import PackedSequence
@@ -684,8 +747,13 @@ def _eval_accuracy(model, sequences, device, batch_size):
             packed = _move_packed(packed, device)
             logits, _ = model(packed)
             preds = logits.argmax(dim=-1).cpu()
-            mask  = padded_labels != -1
-            correct += (preds[mask] == padded_labels[mask]).sum().item()
+            if padded_labels.dim() == 3:  # soft labels
+                true_cls = padded_labels.argmax(dim=-1).cpu()
+                mask = padded_labels.sum(dim=-1) > 0
+            else:
+                true_cls = padded_labels
+                mask = padded_labels != -1
+            correct += (preds[mask] == true_cls[mask]).sum().item()
             total   += mask.sum().item()
     model.train()
     return correct / max(total, 1)
@@ -706,10 +774,15 @@ def _eval_loss(model, sequences, device, batch_size):
             packed        = _move_packed(packed, device)
             padded_labels = padded_labels.to(device)
             logits, _     = model(packed)
-            loss = criterion(
-                logits.reshape(-1, logits.size(-1)),
-                padded_labels.reshape(-1),
-            )
+            if padded_labels.dim() == 3:  # soft labels
+                log_probs = F.log_softmax(logits, dim=-1)
+                mask_s = padded_labels.sum(dim=-1) > 0
+                loss = -(padded_labels * log_probs).sum(dim=-1)[mask_s].mean()
+            else:
+                loss = criterion(
+                    logits.reshape(-1, logits.size(-1)),
+                    padded_labels.reshape(-1),
+                )
             total_loss += loss.item()
             n_batches  += 1
     model.train()
