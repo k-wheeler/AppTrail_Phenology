@@ -19,6 +19,7 @@ import datetime
 import io
 import json
 import os
+import shutil
 from zoneinfo import ZoneInfo
 
 import ee
@@ -293,6 +294,7 @@ def _render_html(web_dir, meta, areas_rnn=None):
     bounds    = meta['bounds']           # [[s, w], [n, e]]
     areas_dt  = meta.get('areas_sqmi', {})
     has_rnn   = areas_rnn is not None
+    has_notebook = os.path.exists(os.path.join(web_dir, 'notebook.html'))
     center    = [(bounds[0][0] + bounds[1][0]) / 2,
                  (bounds[0][1] + bounds[1][1]) / 2]
 
@@ -449,6 +451,9 @@ window['map{phase}'].on('click', function(e) {{
   .bar-label {{ font-size: 0.75rem; margin-top: 4px; color: #555; }}
   #panel-about.active {{ display: block; }}
   #panel-about.active {{ max-width: 720px; }}
+  #panel-notebook.active {{ display: block; }}
+  #panel-notebook iframe {{ width: 100%; height: 82vh; border: 1px solid #ccc;
+                            border-radius: 6px; background: white; }}
   .about-content h3 {{ color: #2c6b3f; font-size: 1rem; margin: 16px 0 6px; }}
   .about-content h3:first-child {{ margin-top: 0; }}
   .about-content p, .about-content li {{ font-size: 0.9rem; line-height: 1.5; color: #333; }}
@@ -477,6 +482,7 @@ window['map{phase}'].on('click', function(e) {{
   <div class="tab" onclick="showTab('rnn', this)">Neural Network</div>
   <div class="tab" onclick="showTab('history', this)">Historical Averages</div>
   <div class="tab" onclick="showTab('about', this)">About</div>
+  <div class="tab" onclick="showTab('notebook', this)">Full Analysis</div>
 </div>
 <div id="panel-dt" class="panel active">
   <div id="map-dt"></div>
@@ -557,6 +563,9 @@ window['map{phase}'].on('click', function(e) {{
     <img src="feature_importance.png" alt="Feature importance bar chart"
          style="width:100%;max-width:580px;margin:8px 0 4px;display:block">
   </div>
+</div>
+<div id="panel-notebook" class="panel">
+  {'<iframe src="notebook.html" title="Full analysis notebook" loading="lazy"></iframe>' if has_notebook else '<p style="color:#777;padding:20px">Full analysis notebook not yet available. Run <code>jupyter nbconvert --to html Main.ipynb</code> and commit Main.html to enable this tab.</p>'}
 </div>
 <script>
 console.log('[AppTrail] Page built for date:', '{date_str}', '| rendered at:', new Date().toISOString());
@@ -936,6 +945,15 @@ def main():
     # Render feature importance chart for the About tab
     print('\nGenerating feature importance chart...')
     _generate_feature_importance_png(args.model_dir, args.web_dir)
+
+    # Copy the committed notebook export (if present) into the web output so it
+    # publishes alongside index.html and powers the "Full Analysis" tab.
+    _nb_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Main.html')
+    if os.path.exists(_nb_src):
+        shutil.copy(_nb_src, os.path.join(args.web_dir, 'notebook.html'))
+        print(f'  Copied notebook export → {os.path.join(args.web_dir, "notebook.html")}')
+    else:
+        print('  Main.html not found — Full Analysis tab will show a placeholder.')
 
     # Render HTML
     print('\nRendering index.html...')
