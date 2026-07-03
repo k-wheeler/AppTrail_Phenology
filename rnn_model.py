@@ -556,7 +556,7 @@ def predict_rnn_from_pixel_state(state_path, date_str, data_dir=None,
         print('  RNN model not found — skipping RNN prediction.')
         return None
 
-    model, norm_stats = load_rnn_model(model_dir)
+    model, norm_stats, _ = load_rnn_model(model_dir)
     norm_mean = np.array([norm_stats[c]['mean'] for c in RNN_FEATURE_COLS], dtype=np.float32)
     norm_std  = np.array([norm_stats[c]['std']  for c in RNN_FEATURE_COLS], dtype=np.float32)
 
