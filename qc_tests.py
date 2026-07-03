@@ -353,30 +353,30 @@ class TestSplitData:
 class TestFitTree:
     def test_unpruned_accuracy_above_chance(self, simple_feature_df):
         x_train, x_test, y_train, y_test = split_data(simple_feature_df)
-        mdl = fit_tree(x_train, y_train, prune=False)
+        mdl, _ = fit_tree(x_train, y_train, prune=False)
         acc = (mdl.predict(x_test) == y_test).mean()
         assert acc > 0.25, f'Test accuracy {acc:.2f} not above random baseline'
 
     def test_all_classes_in_fitted_model(self, simple_feature_df):
         x_train, _, y_train, _ = split_data(simple_feature_df)
-        mdl = fit_tree(x_train, y_train, prune=False)
+        mdl, _ = fit_tree(x_train, y_train, prune=False)
         assert set(mdl.classes_) == {'before', 'early', 'late', 'after'}
 
     def test_feature_importances_sum_to_one(self, simple_feature_df):
         x_train, _, y_train, _ = split_data(simple_feature_df)
-        mdl = fit_tree(x_train, y_train, prune=False)
+        mdl, _ = fit_tree(x_train, y_train, prune=False)
         assert abs(mdl.feature_importances_.sum() - 1.0) < 1e-6
 
     def test_pruned_depth_le_unpruned(self, simple_feature_df):
         x_train, _, y_train, _ = split_data(simple_feature_df)
-        unpruned = fit_tree(x_train, y_train, prune=False)
-        pruned   = fit_tree(x_train, y_train, prune=True)
+        unpruned, _ = fit_tree(x_train, y_train, prune=False)
+        pruned, _   = fit_tree(x_train, y_train, prune=True)
         assert pruned.get_depth() <= unpruned.get_depth()
 
     def test_pruned_train_accuracy_not_perfect(self, simple_feature_df):
         # A pruned tree on synthetic data should not perfectly memorize training set
         x_train, _, y_train, _ = split_data(simple_feature_df)
-        pruned = fit_tree(x_train, y_train, prune=True)
+        pruned, _ = fit_tree(x_train, y_train, prune=True)
         train_acc = (pruned.predict(x_train) == y_train).mean()
         # Allow up to 1.0 but flag if suspiciously perfect on balanced synthetic data
         assert train_acc <= 1.0  # just sanity; main guard is depth test above
