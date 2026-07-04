@@ -457,10 +457,11 @@ window['map{phase}'].on('click', function(e) {{
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  /* Tailwind Preflight (disabled here to protect the map/legend layout) is what
-     sets border-style:solid globally, so the shared nav/sidebar border utilities
-     render nothing without it. Restore just those. */
-  .border-t, .border-b-2, .border-4 {{ border-style: solid; }}
+  /* Preflight is disabled here (to protect the map/legend layout); restore its
+     border reset so the shared nav/sidebar border utilities render the same as
+     on the rest of the site — single lines, not full boxes. Without the width:0
+     default, unset sides keep the browser's medium width and draw a box. */
+  *, ::before, ::after {{ border-width: 0; border-style: solid; border-color: #e5e7eb; }}
   body {{ font-family: ui-sans-serif, system-ui, sans-serif; background: #f9fafb; color: #222; }}
   header {{ background: #3B6D11; color: white; padding: 14px 20px; }}
   header h1 {{ font-size: 1.3rem; }}
@@ -837,7 +838,7 @@ def _render_placeholder_html(web_dir,
 <style>body{{font-family:ui-sans-serif,system-ui,sans-serif;text-align:center;padding:60px;color:#444;}}
 h1{{color:#3B6D11;}}
 /* Preflight is disabled, so restore border-style for the shared nav's underline. */
-.border-t,.border-b-2,.border-4{{border-style:solid;}}</style></head>
+*,::before,::after{{border-width:0;border-style:solid;border-color:#e5e7eb;}}</style></head>
 <body>
 <div id="site-nav-root"></div>
 <script src="/assets/site-nav.js"></script>
