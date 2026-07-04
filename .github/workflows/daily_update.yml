@@ -63,30 +63,50 @@ jobs:
           git add phenology/
           git diff --cached --quiet || git commit -m "chore: phenology update $(date -u +%F)"
           git push
+          # Record the commit the site must end up serving, so the verify step
+          # below can find *its* Pages run (not whatever run happens to be latest).
+          echo "PAGES_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Health check
         run: python health_check.py --data-dir ./Data --web-dir ./web_outputs
 
       # GitHub's built-in "pages build and deployment" workflow is fire-and-forget
       # and its deploy job intermittently fails with "Deployment failed, try again
-      # later", leaving the live site stale. This step waits for the latest Pages
-      # run on the website repo to finish and auto-retries failed deploys.
+      # later", leaving the live site stale. This step waits for the Pages run for
+      # the commit we just pushed (PAGES_SHA) and auto-retries failed deploys.
+      # It must match on head_sha: polling "latest run" races the new run's
+      # creation (it can appear seconds after the push) and can validate a stale,
+      # already-successful run instead — which let a failed deploy go unnoticed.
       - name: Verify Pages deployment (auto-retry on failure)
         env:
           TOKEN: ${{ secrets.PAGES_REPO_TOKEN }}
           REPO: ${{ secrets.PAGES_REPO }}
         run: |
           api() { curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "$@"; }
+          # Wait (up to 2 min) for a Pages run for our commit to appear. If the
+          # push was a no-op (no new commit), this finds the prior run for that
+          # SHA, which is fine — success means the site already serves it.
+          run_id=""
+          for i in $(seq 1 24); do
+            run_id=$(api "https://api.github.com/repos/$REPO/actions/runs?head_sha=$PAGES_SHA&per_page=1" \
+                     | jq -r '.workflow_runs[0].id // empty')
+            [ -n "$run_id" ] && break
+            sleep 5
+          done
+          if [ -z "$run_id" ]; then
+            echo "::error::No Pages run appeared for $PAGES_SHA — site may be stale."
+            exit 1
+          fi
+          echo "Watching Pages run $run_id for commit $PAGES_SHA"
           for attempt in 1 2 3; do
-            # Wait (up to 5 min) for the latest Pages run to complete
+            # Wait (up to 5 min) for the run to complete
             for i in $(seq 1 30); do
-              run=$(api "https://api.github.com/repos/$REPO/actions/runs?per_page=1")
-              status=$(echo "$run" | jq -r '.workflow_runs[0].status')
+              run=$(api "https://api.github.com/repos/$REPO/actions/runs/$run_id")
+              status=$(echo "$run" | jq -r '.status')
               [ "$status" = "completed" ] && break
               sleep 10
             done
-            run_id=$(echo "$run" | jq -r '.workflow_runs[0].id')
-            conclusion=$(echo "$run" | jq -r '.workflow_runs[0].conclusion')
+            conclusion=$(echo "$run" | jq -r '.conclusion')
             echo "Pages run $run_id concluded: $conclusion (attempt $attempt)"
             if [ "$conclusion" = "success" ]; then
               echo "Pages deployment succeeded."
