@@ -2,7 +2,10 @@ name: Daily Phenology Update
 
 on:
   schedule:
-    - cron: '0 9 * * *'   # 9am UTC = 5am ET (EDT, UTC-4)
+    # 07:17 UTC target = 3:17am EDT / 2:17am EST. Off the top of the hour to
+    # dodge peak scheduling contention (the main cause of multi-hour delays),
+    # and early enough that even a delayed run finishes by morning ET.
+    - cron: '17 7 * * *'
   workflow_dispatch:        # allow manual trigger for testing
 
 jobs:
