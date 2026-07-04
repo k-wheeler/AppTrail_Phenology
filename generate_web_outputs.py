@@ -423,6 +423,10 @@ window['map{phase}'].on('click', function(e) {{
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  /* Tailwind Preflight (disabled here to protect the map/legend layout) is what
+     sets border-style:solid globally, so the shared nav/sidebar border utilities
+     render nothing without it. Restore just those. */
+  .border-t, .border-b-2, .border-4 {{ border-style: solid; }}
   body {{ font-family: ui-sans-serif, system-ui, sans-serif; background: #f9fafb; color: #222; }}
   header {{ background: #3B6D11; color: white; padding: 14px 20px; }}
   header h1 {{ font-size: 1.3rem; }}
@@ -435,7 +439,7 @@ window['map{phase}'].on('click', function(e) {{
   .panel {{ display: none; padding: 20px; }}
   .panel.active {{ display: flex; flex-direction: column; gap: 16px; }}
   .map-row {{ display: flex; gap: 20px; flex-wrap: wrap; align-items: stretch; }}
-  #map-dt, #map-rnn {{ width: 620px; max-width: 100%; height: 480px; border-radius: 6px;
+  #map-dt, #map-rnn {{ width: 500px; max-width: 100%; height: 480px; border-radius: 6px;
                        border: 1px solid #ccc; }}
   .sidebar {{ display: flex; flex-direction: column; gap: 16px; }}
   .legend {{ background: white; border: 1px solid #ccc; border-radius: 6px;
@@ -491,7 +495,7 @@ window['map{phase}'].on('click', function(e) {{
 <body>
 <div id="site-nav-root"></div>
 <script src="/assets/site-nav.js"></script>
-<div class="max-w-7xl mx-auto px-6 py-10 flex flex-col md:flex-row gap-8">
+<div class="max-w-6xl mx-auto px-6 py-10 flex flex-col md:flex-row gap-8">
 <div id="site-sidebar-root"></div>
 <script src="/assets/site-sidebar.js"></script>
 <main class="flex-1 min-w-0">
@@ -802,7 +806,9 @@ def _render_placeholder_html(web_dir,
 <script src="/assets/site-theme.js"></script>
 <script>if (window.tailwind && tailwind.config) {{ tailwind.config.corePlugins = {{ preflight: false }}; }}</script>
 <style>body{{font-family:ui-sans-serif,system-ui,sans-serif;text-align:center;padding:60px;color:#444;}}
-h1{{color:#3B6D11;}}</style></head>
+h1{{color:#3B6D11;}}
+/* Preflight is disabled, so restore border-style for the shared nav's underline. */
+.border-t,.border-b-2,.border-4{{border-style:solid;}}</style></head>
 <body>
 <div id="site-nav-root"></div>
 <script src="/assets/site-nav.js"></script>
