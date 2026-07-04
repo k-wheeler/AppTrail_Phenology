@@ -18,6 +18,7 @@ import base64
 import datetime
 import io
 import json
+import math
 import os
 import shutil
 from zoneinfo import ZoneInfo
@@ -326,20 +327,53 @@ def _render_html(web_dir, meta, areas_rnn=None):
         '</div>'
     )
 
-    def _hist_bars(areas):
-        total = sum(v for k, v in areas.items() if k != 'unknown') or 1
-        return ''.join(
-            f'<div class="bar-row">'
-            f'<div class="bar-label">{l.capitalize()}</div>'
-            f'<div class="bar-track"><div class="bar" style="width:{areas.get(l,0)/total*100:.1f}%;'
-            f'background:{LABEL_COLORS[l]}"></div></div>'
-            f'<div class="bar-area">{areas.get(l,0):.1f} mi²</div>'
-            f'</div>'
-            for l in LABEL_ORDER if l != 'unknown'
-        )
+    def _pie_svg(areas):
+        """Return an SVG pie chart of the phenological-state proportions."""
+        labels = [l for l in LABEL_ORDER if l != 'unknown']
+        vals = {l: max(float(areas.get(l, 0.0)), 0.0) for l in labels}
+        total = sum(vals.values())
+        cx = cy = 100.0
+        r = 92.0
+        nonzero = [l for l in labels if vals[l] > 0]
+        parts = []
+        if total <= 0:
+            parts.append(f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="#e5e7eb"/>')
+        elif len(nonzero) == 1:
+            # A single non-zero state can't be drawn as an arc (start == end);
+            # render a full circle labelled 100%.
+            l = nonzero[0]
+            parts.append(f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{LABEL_COLORS[l]}" '
+                         f'stroke="#fff" stroke-width="2"/>')
+            parts.append(f'<text x="{cx}" y="{cy}" text-anchor="middle" '
+                         f'dominant-baseline="central" fill="#fff" font-size="24" '
+                         f'font-weight="700">100%</text>')
+        else:
+            ang = -90.0  # start at 12 o'clock
+            for l in labels:
+                v = vals[l]
+                if v <= 0:
+                    continue
+                frac = v / total
+                end = ang + frac * 360.0
+                a0, a1 = math.radians(ang), math.radians(end)
+                x0, y0 = cx + r * math.cos(a0), cy + r * math.sin(a0)
+                x1, y1 = cx + r * math.cos(a1), cy + r * math.sin(a1)
+                large = 1 if frac > 0.5 else 0
+                parts.append(f'<path d="M{cx:.1f},{cy:.1f} L{x0:.2f},{y0:.2f} '
+                             f'A{r},{r} 0 {large} 1 {x1:.2f},{y1:.2f} Z" '
+                             f'fill="{LABEL_COLORS[l]}" stroke="#fff" stroke-width="1.5"/>')
+                if frac >= 0.06:  # only label slices big enough to hold text
+                    mid = math.radians((ang + end) / 2.0)
+                    lx, ly = cx + r * 0.6 * math.cos(mid), cy + r * 0.6 * math.sin(mid)
+                    parts.append(f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="middle" '
+                                 f'dominant-baseline="central" fill="#fff" font-size="17" '
+                                 f'font-weight="700">{round(frac * 100)}%</text>')
+                ang = end
+        return (f'<svg class="pie" viewBox="0 0 200 200" role="img" '
+                f'aria-label="Predicted phenological state proportions">{"".join(parts)}</svg>')
 
-    hist_bars_dt  = _hist_bars(areas_dt)
-    hist_bars_rnn = _hist_bars(areas_rnn) if has_rnn else ''
+    pie_dt  = _pie_svg(areas_dt)
+    pie_rnn = _pie_svg(areas_rnn) if has_rnn else ''
 
     # Pre-compute RNN map JS (must use an f-string here so {center}/{bounds}/{date_str}
     # expand correctly; single JS braces are written as {{ }} to survive f-string processing).
@@ -454,14 +488,9 @@ window['map{phase}'].on('click', function(e) {{
   .legend-desc {{ font-size: 0.78rem; color: #888; padding-left: 22px; margin-top: 1px; }}
   .histogram {{ flex: 1 1 260px; min-width: 260px; max-width: 620px; height: 480px;
                 display: flex; flex-direction: column; justify-content: center;
-                gap: 20px; background: white; border: 1px solid #ccc; border-radius: 6px;
-                padding: 16px 24px; }}
-  .bar-row {{ display: flex; align-items: center; gap: 12px; }}
-  .bar-label {{ width: 60px; flex-shrink: 0; text-align: right;
-                font-size: 0.85rem; font-weight: 600; color: #444; }}
-  .bar-track {{ flex: 1; height: 34px; border-radius: 4px; overflow: hidden; }}
-  .bar {{ height: 100%; min-width: 2px; border-radius: 4px; }}
-  .bar-area {{ width: 64px; flex-shrink: 0; font-size: 0.8rem; color: #555; }}
+                align-items: center; gap: 20px; background: white; border: 1px solid #ccc;
+                border-radius: 6px; padding: 16px 24px; }}
+  .pie {{ width: 100%; max-width: 300px; height: auto; }}
   #panel-about.active {{ display: block; }}
   #panel-about.active {{ max-width: 720px; }}
   #panel-notebook.active {{ display: block; }}
@@ -523,12 +552,12 @@ window['map{phase}'].on('click', function(e) {{
   <div class="map-row">
     <div id="map-dt"></div>
     <div class="histogram">
-      {hist_bars_dt}
+      {pie_dt}
     </div>
   </div>
 </div>
 <div id="panel-rnn" class="panel">
-  {'<div class="legend"><h3>Predicted Current Phenological State</h3><div class="legend-items">' + legend_rows + '</div></div><div class="map-row"><div id="map-rnn"></div><div class="histogram">' + hist_bars_rnn + '</div></div>' if has_rnn else '<p style="color:#777;padding:20px">Neural Network model not yet available. Run the RNN training cell in Main.ipynb and commit rnn_model.pt to enable this tab.</p>'}
+  {'<div class="legend"><h3>Predicted Current Phenological State</h3><div class="legend-items">' + legend_rows + '</div></div><div class="map-row"><div id="map-rnn"></div><div class="histogram">' + pie_rnn + '</div></div>' if has_rnn else '<p style="color:#777;padding:20px">Neural Network model not yet available. Run the RNN training cell in Main.ipynb and commit rnn_model.pt to enable this tab.</p>'}
 </div>
 <div id="panel-history" class="panel">
   {avg_tabs if avg_tabs else '<p style="color:#777">Average transition maps not yet available.</p>'}
