@@ -329,11 +329,11 @@ def _render_html(web_dir, meta, areas_rnn=None):
     def _hist_bars(areas):
         total = sum(v for k, v in areas.items() if k != 'unknown') or 1
         return ''.join(
-            f'<div class="bar-wrap">'
-            f'<div class="bar-area">{areas.get(l,0):.1f} mi²</div>'
-            f'<div class="bar" style="height:{int(areas.get(l,0)/total*160)}px;'
-            f'background:{LABEL_COLORS[l]}"></div>'
+            f'<div class="bar-row">'
             f'<div class="bar-label">{l.capitalize()}</div>'
+            f'<div class="bar-track"><div class="bar" style="width:{areas.get(l,0)/total*100:.1f}%;'
+            f'background:{LABEL_COLORS[l]}"></div></div>'
+            f'<div class="bar-area">{areas.get(l,0):.1f} mi²</div>'
             f'</div>'
             for l in LABEL_ORDER if l != 'unknown'
         )
@@ -433,26 +433,31 @@ window['map{phase}'].on('click', function(e) {{
             background: #eee; font-size: 0.9rem; }}
   .tab.active {{ background: #3B6D11; color: white; }}
   .panel {{ display: none; padding: 20px; }}
-  .panel.active {{ display: flex; gap: 20px; flex-wrap: wrap; }}
+  .panel.active {{ display: flex; flex-direction: column; gap: 16px; }}
+  .map-row {{ display: flex; gap: 20px; flex-wrap: wrap; align-items: stretch; }}
   #map-dt, #map-rnn {{ width: 620px; max-width: 100%; height: 480px; border-radius: 6px;
                        border: 1px solid #ccc; }}
   .sidebar {{ display: flex; flex-direction: column; gap: 16px; }}
   .legend {{ background: white; border: 1px solid #ccc; border-radius: 6px;
               padding: 12px 16px; }}
   .legend h3 {{ margin-bottom: 8px; font-size: 0.9rem; color: #444; }}
+  .legend-items {{ display: flex; flex-wrap: wrap; gap: 8px 28px; }}
   .swatch {{ display: inline-block; width: 14px; height: 14px;
               border-radius: 2px; margin-right: 8px; vertical-align: middle; }}
-  .legend-item {{ margin-bottom: 8px; }}
+  .legend-item {{ margin-bottom: 0; }}
   .legend-row {{ display: flex; align-items: center; }}
   .legend-name {{ font-size: 0.88rem; font-weight: 600; }}
   .legend-desc {{ font-size: 0.78rem; color: #888; padding-left: 22px; margin-top: 1px; }}
-  .histogram {{ display: flex; align-items: flex-end; gap: 8px;
-                background: white; border: 1px solid #ccc; border-radius: 6px;
-                padding: 16px; }}
-  .bar-wrap {{ text-align: center; }}
-  .bar {{ width: 44px; border-radius: 3px 3px 0 0; min-height: 2px; }}
-  .bar-area {{ font-size: 0.72rem; color: #555; margin-bottom: 2px; }}
-  .bar-label {{ font-size: 0.75rem; margin-top: 4px; color: #555; }}
+  .histogram {{ flex: 1 1 260px; min-width: 260px; max-width: 620px; height: 480px;
+                display: flex; flex-direction: column; justify-content: center;
+                gap: 20px; background: white; border: 1px solid #ccc; border-radius: 6px;
+                padding: 16px 24px; }}
+  .bar-row {{ display: flex; align-items: center; gap: 12px; }}
+  .bar-label {{ width: 60px; flex-shrink: 0; text-align: right;
+                font-size: 0.85rem; font-weight: 600; color: #444; }}
+  .bar-track {{ flex: 1; height: 34px; border-radius: 4px; overflow: hidden; }}
+  .bar {{ height: 100%; min-width: 2px; border-radius: 4px; }}
+  .bar-area {{ width: 64px; flex-shrink: 0; font-size: 0.8rem; color: #555; }}
   #panel-about.active {{ display: block; }}
   #panel-about.active {{ max-width: 720px; }}
   #panel-notebook.active {{ display: block; }}
@@ -486,6 +491,10 @@ window['map{phase}'].on('click', function(e) {{
 <body>
 <div id="site-nav-root"></div>
 <script src="/assets/site-nav.js"></script>
+<div class="max-w-7xl mx-auto px-6 py-10 flex flex-col md:flex-row gap-8">
+<div id="site-sidebar-root"></div>
+<script src="/assets/site-sidebar.js"></script>
+<main class="flex-1 min-w-0">
 <header>
   <h1>Appalachian Trail Fall Phenology — Massachusetts</h1>
   <p>Prediction for <strong>{date_str}</strong> &nbsp;|&nbsp;
@@ -503,19 +512,19 @@ window['map{phase}'].on('click', function(e) {{
   <div class="tab" onclick="showTab('claude', this)">Claude Code Experience</div>
 </div>
 <div id="panel-dt" class="panel active">
-  <div id="map-dt"></div>
-  <div class="sidebar">
-    <div class="legend">
-      <h3>Phenological State</h3>
-      {legend_rows}
-    </div>
+  <div class="legend">
+    <h3>Predicted Current Phenological State</h3>
+    <div class="legend-items">{legend_rows}</div>
+  </div>
+  <div class="map-row">
+    <div id="map-dt"></div>
     <div class="histogram">
       {hist_bars_dt}
     </div>
   </div>
 </div>
 <div id="panel-rnn" class="panel">
-  {'<div id="map-rnn"></div><div class="sidebar"><div class="legend"><h3>Phenological State</h3>' + legend_rows + '</div><div class="histogram">' + hist_bars_rnn + '</div></div>' if has_rnn else '<p style="color:#777;padding:20px">Neural Network model not yet available. Run the RNN training cell in Main.ipynb and commit rnn_model.pt to enable this tab.</p>'}
+  {'<div class="legend"><h3>Predicted Current Phenological State</h3><div class="legend-items">' + legend_rows + '</div></div><div class="map-row"><div id="map-rnn"></div><div class="histogram">' + hist_bars_rnn + '</div></div>' if has_rnn else '<p style="color:#777;padding:20px">Neural Network model not yet available. Run the RNN training cell in Main.ipynb and commit rnn_model.pt to enable this tab.</p>'}
 </div>
 <div id="panel-history" class="panel">
   {avg_tabs if avg_tabs else '<p style="color:#777">Average transition maps not yet available.</p>'}
@@ -761,6 +770,8 @@ fetch('at_route.geojson')
   }})
   .catch(function(e) {{ console.warn('at_route.geojson not loaded:', e); }});
 </script>
+</main>
+</div>
 </body>
 </html>
 '''
