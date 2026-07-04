@@ -54,6 +54,10 @@ jobs:
 
       - name: Push web outputs to GitHub Pages repo
         run: |
+          # Recorded before the push so the verify step can find whichever Pages
+          # run actually covers this push, rather than matching an exact commit
+          # (see note below on why exact-SHA matching doesn't work).
+          echo "PUSH_TIME_EPOCH=$(date -u +%s)" >> "$GITHUB_ENV"
           git clone https://x-access-token:${{ secrets.PAGES_REPO_TOKEN }}@github.com/${{ secrets.PAGES_REPO }}.git pages_repo
           mkdir -p pages_repo/phenology
           cp -r web_outputs/* pages_repo/phenology/
@@ -63,41 +67,47 @@ jobs:
           git add phenology/
           git diff --cached --quiet || git commit -m "chore: phenology update $(date -u +%F)"
           git push
-          # Record the commit the site must end up serving, so the verify step
-          # below can find *its* Pages run (not whatever run happens to be latest).
-          echo "PAGES_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Health check
         run: python health_check.py --data-dir ./Data --web-dir ./web_outputs
 
       # GitHub's built-in "pages build and deployment" workflow is fire-and-forget
       # and its deploy job intermittently fails with "Deployment failed, try again
-      # later", leaving the live site stale. This step waits for the Pages run for
-      # the commit we just pushed (PAGES_SHA) and auto-retries failed deploys.
-      # It must match on head_sha: polling "latest run" races the new run's
-      # creation (it can appear seconds after the push) and can validate a stale,
-      # already-successful run instead — which let a failed deploy go unnoticed.
+      # later", leaving the live site stale. This step waits for the Pages run
+      # covering our push and auto-retries failed deploys.
+      #
+      # It matches by *time* (created_at >= PUSH_TIME_EPOCH), not by exact
+      # head_sha. Two earlier approaches both failed in practice:
+      #   - Polling "latest run" raced the new run's creation (it can appear
+      #     seconds after the push) and could validate a stale, already-
+      #     successful prior run instead — a failed deploy would go unnoticed.
+      #   - Matching on exact head_sha broke when another push (e.g. a manual
+      #     website edit) landed within ~seconds of this one: GitHub's classic
+      #     branch-deploy Pages coalesces near-simultaneous pushes into a single
+      #     build, so a run for our exact commit is never created — not delayed,
+      #     never created — and the step failed even though the site deployed
+      #     our content fine (Pages always builds from the current branch tip).
       - name: Verify Pages deployment (auto-retry on failure)
         env:
           TOKEN: ${{ secrets.PAGES_REPO_TOKEN }}
           REPO: ${{ secrets.PAGES_REPO }}
         run: |
           api() { curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "$@"; }
-          # Wait (up to 2 min) for a Pages run for our commit to appear. If the
-          # push was a no-op (no new commit), this finds the prior run for that
-          # SHA, which is fine — success means the site already serves it.
+          # Wait (up to 3 min) for a Pages run created at/after our push to
+          # appear. -60s buffer tolerates clock skew between this runner and
+          # GitHub's API.
           run_id=""
-          for i in $(seq 1 24); do
-            run_id=$(api "https://api.github.com/repos/$REPO/actions/runs?head_sha=$PAGES_SHA&per_page=1" \
-                     | jq -r '.workflow_runs[0].id // empty')
+          for i in $(seq 1 36); do
+            run_id=$(api "https://api.github.com/repos/$REPO/actions/runs?per_page=5" | jq -r --argjson t "$((PUSH_TIME_EPOCH - 60))" '
+              [.workflow_runs[] | select((.created_at | fromdateiso8601) >= $t)] | sort_by(.created_at) | .[0].id // empty')
             [ -n "$run_id" ] && break
             sleep 5
           done
           if [ -z "$run_id" ]; then
-            echo "::error::No Pages run appeared for $PAGES_SHA — site may be stale."
+            echo "::error::No Pages run appeared after the push — site may be stale."
             exit 1
           fi
-          echo "Watching Pages run $run_id for commit $PAGES_SHA"
+          echo "Watching Pages run $run_id"
           for attempt in 1 2 3; do
             # Wait (up to 5 min) for the run to complete
             for i in $(seq 1 30); do
