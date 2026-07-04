@@ -13,8 +13,11 @@ import datetime
 import json
 import os
 import sys
+from zoneinfo import ZoneInfo
 
 import numpy as np
+
+EASTERN = ZoneInfo('America/New_York')
 
 
 def _check(label, passed, detail):
@@ -198,7 +201,7 @@ def main():
     parser.add_argument('--web-dir',  default='./web_outputs')
     args = parser.parse_args()
 
-    today = datetime.date.today()
+    today = datetime.datetime.now(EASTERN).date()
     today_str = today.isoformat()
     today_doy = today.timetuple().tm_yday
     # generate_web_outputs.py only produces full outputs Jun 1–Dec 31 (DOY 152–365).
