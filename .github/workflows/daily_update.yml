@@ -93,38 +93,45 @@ jobs:
           REPO: ${{ secrets.PAGES_REPO }}
         run: |
           api() { curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "$@"; }
-          # Wait (up to 3 min) for a Pages run created at/after our push to
-          # appear. -60s buffer tolerates clock skew between this runner and
-          # GitHub's API.
+          # Newest Pages run created at/after our push. -60s buffer tolerates
+          # clock skew. We re-resolve this each attempt (not pin one run id): a
+          # push landing seconds after ours supersedes our deploy, and re-running
+          # a superseded run never succeeds — we must act on the newest run.
+          latest_run() {
+            api "https://api.github.com/repos/$REPO/actions/runs?per_page=5" \
+              | jq -r --argjson t "$((PUSH_TIME_EPOCH - 60))" \
+                '[.workflow_runs[] | select((.created_at | fromdateiso8601) >= $t)] | sort_by(.created_at) | last | .id // empty'
+          }
+          # Wait (up to 3 min) for a Pages run for our push to appear.
           run_id=""
-          for i in $(seq 1 36); do
-            run_id=$(api "https://api.github.com/repos/$REPO/actions/runs?per_page=5" | jq -r --argjson t "$((PUSH_TIME_EPOCH - 60))" '
-              [.workflow_runs[] | select((.created_at | fromdateiso8601) >= $t)] | sort_by(.created_at) | .[0].id // empty')
-            [ -n "$run_id" ] && break
-            sleep 5
-          done
+          for i in $(seq 1 36); do run_id=$(latest_run); [ -n "$run_id" ] && break; sleep 5; done
           if [ -z "$run_id" ]; then
             echo "::error::No Pages run appeared after the push — site may be stale."
             exit 1
           fi
-          echo "Watching Pages run $run_id"
-          for attempt in 1 2 3; do
-            # Wait (up to 5 min) for the run to complete
+          # Retry with increasing backoff. GitHub Pages' "Deployment failed, try
+          # again later" can persist for a few minutes after a burst of deploys,
+          # so short 30s retries just re-hit the same bad state; back off 90s,
+          # 180s, 270s to outlast it (~9 min total recovery window).
+          for attempt in 1 2 3 4; do
+            rid=$(latest_run); [ -n "$rid" ] && run_id="$rid"
             for i in $(seq 1 30); do
-              run=$(api "https://api.github.com/repos/$REPO/actions/runs/$run_id")
-              status=$(echo "$run" | jq -r '.status')
+              status=$(api "https://api.github.com/repos/$REPO/actions/runs/$run_id" | jq -r '.status')
               [ "$status" = "completed" ] && break
               sleep 10
             done
-            conclusion=$(echo "$run" | jq -r '.conclusion')
+            conclusion=$(api "https://api.github.com/repos/$REPO/actions/runs/$run_id" | jq -r '.conclusion')
             echo "Pages run $run_id concluded: $conclusion (attempt $attempt)"
             if [ "$conclusion" = "success" ]; then
               echo "Pages deployment succeeded."
               exit 0
             fi
-            echo "Re-running failed Pages deploy..."
+            [ "$attempt" -eq 4 ] && break
+            backoff=$((attempt * 90))
+            echo "Deploy failed; waiting ${backoff}s for GitHub Pages to recover, then re-running..."
+            sleep "$backoff"
             api -X POST "https://api.github.com/repos/$REPO/actions/runs/$run_id/rerun-failed-jobs" > /dev/null
-            sleep 30
+            sleep 20
           done
-          echo "::error::Pages deployment still failing after 3 attempts — site may be stale."
+          echo "::error::Pages deployment still failing after retries — site may be stale."
           exit 1
