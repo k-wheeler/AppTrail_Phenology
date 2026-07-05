@@ -74,7 +74,17 @@ jobs:
       # GitHub's built-in "pages build and deployment" workflow is fire-and-forget
       # and its deploy job intermittently fails with "Deployment failed, try again
       # later", leaving the live site stale. This step waits for the Pages run
-      # covering our push and auto-retries failed deploys.
+      # covering our push and fails loudly if it never succeeds.
+      #
+      # The actual *repair* lives in the website repo itself
+      # (.github/workflows/pages-auto-retry.yml on k-wheeler.github.io): it fires
+      # on every failed Pages run and re-runs the deploy with its own repo's
+      # GITHUB_TOKEN. The rerun attempts below are kept as a secondary nudge, but
+      # note that PAGES_REPO_TOKEN could push content while its rerun API calls
+      # were rejected (runs stayed at attempt 1) — which is why the responses are
+      # now printed instead of discarded, and why this step's real job is to
+      # WAIT long enough for the website-side watcher to finish its backoff
+      # cycle, then report the final state.
       #
       # It matches by *time* (created_at >= PUSH_TIME_EPOCH), not by exact
       # head_sha. Two earlier approaches both failed in practice:
@@ -109,10 +119,11 @@ jobs:
             echo "::error::No Pages run appeared after the push — site may be stale."
             exit 1
           fi
-          # Retry with increasing backoff. GitHub Pages' "Deployment failed, try
-          # again later" can persist for a few minutes after a burst of deploys,
-          # so short 30s retries just re-hit the same bad state; back off 90s,
-          # 180s, 270s to outlast it (~9 min total recovery window).
+          # Watch with increasing backoff, long enough (~18 min) to cover the
+          # website-side watcher's full 2/4/6-min backoff cycle plus run times.
+          # Success can arrive as a new attempt of the same run (rerun) or as a
+          # brand-new run (the watcher's retrigger commit) — latest_run() plus
+          # re-polling covers both.
           for attempt in 1 2 3 4; do
             rid=$(latest_run); [ -n "$rid" ] && run_id="$rid"
             for i in $(seq 1 30); do
@@ -127,10 +138,11 @@ jobs:
               exit 0
             fi
             [ "$attempt" -eq 4 ] && break
-            backoff=$((attempt * 90))
-            echo "Deploy failed; waiting ${backoff}s for GitHub Pages to recover, then re-running..."
+            backoff=$((attempt * 120))
+            echo "Deploy failed; waiting ${backoff}s (website-side auto-retry should be working on it), then nudging a re-run..."
             sleep "$backoff"
-            api -X POST "https://api.github.com/repos/$REPO/actions/runs/$run_id/rerun-failed-jobs" > /dev/null
+            resp=$(api -X POST "https://api.github.com/repos/$REPO/actions/runs/$run_id/rerun-failed-jobs")
+            echo "rerun API response: ${resp:-<empty = accepted>}"
             sleep 20
           done
           echo "::error::Pages deployment still failing after retries — site may be stale."
