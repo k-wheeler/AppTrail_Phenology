@@ -49,6 +49,17 @@ from predict_for_date import predict_from_pixel_state
 from rnn_model import predict_rnn_from_pixel_state
 from gridmet_utils import update_cdd_state
 
+# CARTO basemaps now require an API key: keyless requests still return HTTP 200
+# but serve an "API KEY REQUIRED" watermark tile instead of the map. The key is
+# supplied by the CARTO_API_KEY environment variable (a GitHub secret in the
+# daily workflow). Without it the page still builds, just watermarked, so a
+# missing secret degrades rather than breaks.
+CARTO_API_KEY = os.environ.get('CARTO_API_KEY', '').strip()
+BASEMAP_URL = ('https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+               + (f'?key={CARTO_API_KEY}' if CARTO_API_KEY else ''))
+# CARTO's terms require this attribution stay visible on every map.
+BASEMAP_ATTR = '&copy; OpenStreetMap contributors, &copy; CARTO'
+
 
 def _reproject_rgba_to_web(rgba, src_transform, src_crs):
     """Reproject a native-grid RGBA image to EPSG:3857 for correct map placement.
@@ -380,8 +391,8 @@ def _render_html(web_dir, meta, areas_rnn=None):
     if has_rnn:
         rnn_map_js = (
             f'var mapRnn = L.map("map-rnn").setView({center}, 10);\n'
-            f'L.tileLayer("https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png",\n'
-            f'    {{attribution: "&copy; OpenStreetMap contributors &copy; CARTO"}}).addTo(mapRnn);\n'
+            f'L.tileLayer("{BASEMAP_URL}",\n'
+            f'    {{attribution: "{BASEMAP_ATTR}"}}).addTo(mapRnn);\n'
             f'L.imageOverlay("current_pred_rnn.png?v={date_str}", {bounds}, {{opacity: 1.0}}).addTo(mapRnn);'
         )
     else:
@@ -412,8 +423,8 @@ function doyToDate(doy) {
             avg_js += f'''
 window['map{phase}'] = L.map('map-{phase}', {{zoomControl: false}})
     .setView({center}, 10);
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',
-    {{attribution: '&copy; OpenStreetMap &copy; CARTO'}}).addTo(window['map{phase}']);
+L.tileLayer('{BASEMAP_URL}',
+    {{attribution: '{BASEMAP_ATTR}'}}).addTo(window['map{phase}']);
 L.imageOverlay('avg_{phase}.png', {bounds}, {{opacity: 0.85}}).addTo(window['map{phase}']);
 window['map{phase}'].on('click', function(e) {{
   if (!pixelArr) return;
@@ -682,8 +693,8 @@ function showTab(name, el) {{
 
 // Decision Tree prediction map
 var mapDt = L.map('map-dt').setView({center}, 10);
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',
-    {{attribution: '&copy; OpenStreetMap contributors &copy; CARTO'}}).addTo(mapDt);
+L.tileLayer('{BASEMAP_URL}',
+    {{attribution: '{BASEMAP_ATTR}'}}).addTo(mapDt);
 L.imageOverlay('current_pred_dt.png?v={date_str}', {bounds}, {{opacity: 1.0}}).addTo(mapDt);
 
 // Neural Network prediction map

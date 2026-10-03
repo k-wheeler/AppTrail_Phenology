@@ -51,6 +51,9 @@ jobs:
         run: python generate_web_outputs.py --data-dir ./Data --greendown-dir ./Greendown_Outputs --model-dir ./Model_Outputs --web-dir ./web_outputs
         env:
           GEE_SERVICE_ACCOUNT_KEY: ${{ secrets.GEE_SERVICE_ACCOUNT_KEY }}
+          # CARTO basemaps require a key; without it the map tiles render as an
+          # "API KEY REQUIRED" watermark. Free non-commercial tier.
+          CARTO_API_KEY: ${{ secrets.CARTO_API_KEY }}
 
       - name: Commit updated pixel state
         run: |
