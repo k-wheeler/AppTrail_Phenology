@@ -1,18 +1,25 @@
 name: Daily Phenology Update
 
 on:
-  schedule:
-    # Primary at 07:17 UTC (3:17am EDT) plus a 12:17 UTC (8:17am EDT) backup.
-    # Off the top of the hour to dodge peak scheduling contention (the main
-    # cause of multi-hour delays). The backup exists because GitHub scheduled
-    # events are best-effort and occasionally dropped outright (2026-07-06's
-    # run simply never fired). When the primary did run, the backup re-runs
-    # harmlessly: same-day content is either refreshed with newer satellite
-    # imagery or comes out unchanged, in which case nothing is pushed and the
-    # deploy verification is skipped.
-    - cron: '17 7 * * *'
-    - cron: '17 12 * * *'
-  workflow_dispatch:        # allow manual trigger for testing
+  # ── Daily forecasting is PAUSED for the off-season (since 2026-11-18) ──────
+  # Leaf color change is complete, so the published page is frozen at its final
+  # 2026 prediction and the schedule below is disabled. Uncomment both cron
+  # lines next summer (the tool's season runs Jun 1 - Dec 31) to resume daily
+  # updates; nothing else needs changing.
+  #
+  # Primary at 07:17 UTC (3:17am EDT) plus a 12:17 UTC (8:17am EDT) backup.
+  # Off the top of the hour to dodge peak scheduling contention (the main
+  # cause of multi-hour delays). The backup exists because GitHub scheduled
+  # events are best-effort and occasionally dropped outright (2026-07-06's
+  # run simply never fired). When the primary did run, the backup re-runs
+  # harmlessly: same-day content is either refreshed with newer satellite
+  # imagery or comes out unchanged, in which case nothing is pushed and the
+  # deploy verification is skipped.
+  #
+  # schedule:
+  #   - cron: '17 7 * * *'
+  #   - cron: '17 12 * * *'
+  workflow_dispatch:        # manual trigger (also how you'd test a resume)
 
 # If the primary fires late and overlaps the backup, run them one at a time
 # instead of racing (concurrent runs would collide on the git pushes).
